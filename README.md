@@ -43,9 +43,11 @@ pnpm install
 # copy and fill env vars
 cp .env.example .env.local
 
-# apply the migration to your Supabase project (paste into the SQL editor
-# or use the Supabase CLI)
-psql "$DATABASE_URL" -f supabase/migrations/01_init.sql
+# apply the migration: easiest is to push to GitHub — the Supabase GitHub
+# integration applies anything new in supabase/migrations/ automatically.
+# Locally you can also run:
+#   supabase db push
+# or paste the SQL into the dashboard's SQL editor.
 
 # run the dashboard
 pnpm dev:web
@@ -69,7 +71,7 @@ claim jobs and write events/artifacts on behalf of users).
 
 ## Database
 
-Tables (see [`supabase/migrations/01_init.sql`](supabase/migrations/01_init.sql)):
+Tables (see [`supabase/migrations/`](supabase/migrations/)):
 
 | table         | purpose                                                |
 | ------------- | ------------------------------------------------------ |

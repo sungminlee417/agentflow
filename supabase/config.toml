@@ -1,0 +1,15 @@
+# Supabase project config.
+#
+# `project_id` binds this directory to your remote Supabase project so
+# `supabase link`, `supabase db push`, and `supabase start` know where
+# to point. Fill in your project ref — the subdomain of your project's
+# dashboard URL (e.g. "abcdefghijklmnopqrst" in
+# https://abcdefghijklmnopqrst.supabase.co).
+#
+# The GitHub integration itself does NOT need this file — it watches
+# supabase/migrations/ in the configured branch and applies any new
+# <YYYYMMDDHHMMSS>_<name>.sql files automatically. config.toml is here
+# for local CLI usage and so anyone cloning the repo knows the project
+# layout.
+
+project_id = "YOUR_PROJECT_REF"
