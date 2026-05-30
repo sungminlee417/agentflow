@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -21,11 +22,32 @@ export function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createSupabaseBrowserClient();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   async function signOut() {
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();
+  }
+
+  async function deleteConversation(id: string) {
+    if (deletingId) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/conversations/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      // If we're currently viewing the deleted chat, go home.
+      if (pathname === `/chat/${id}`) {
+        router.push("/chat");
+      }
+      router.refresh();
+    } catch (err) {
+      console.error("Failed to delete conversation:", err);
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -49,11 +71,12 @@ export function Sidebar({
             {conversations.map((c) => {
               const href = `/chat/${c.id}`;
               const active = pathname === href;
+              const isDeleting = deletingId === c.id;
               return (
-                <li key={c.id}>
+                <li key={c.id} className="group relative flex items-center">
                   <Link
                     href={href}
-                    className={`block truncate rounded-md px-3 py-2 text-sm transition ${
+                    className={`block flex-1 truncate rounded-md px-3 py-2 text-sm transition pr-8 ${
                       active
                         ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
                         : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
@@ -61,6 +84,21 @@ export function Sidebar({
                   >
                     {c.title ?? "Untitled"}
                   </Link>
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      deleteConversation(c.id);
+                    }}
+                    disabled={isDeleting}
+                    aria-label="Delete conversation"
+                    className="absolute right-1 flex h-6 w-6 items-center justify-center rounded opacity-0 transition group-hover:opacity-100 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/40 dark:hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isDeleting ? (
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    ) : (
+                      <span aria-hidden>×</span>
+                    )}
+                  </button>
                 </li>
               );
             })}
