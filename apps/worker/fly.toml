@@ -1,0 +1,27 @@
+# Fly.io config for the agentflow worker.
+#
+# Free tier: 3 shared-cpu-1x VMs, 256MB RAM each. One always-on VM is
+# plenty for a poll-loop worker. Generated baseline — run
+# `fly launch --no-deploy` once you've created the app to get a real
+# app name and Fly-managed values.
+
+app = "agentflow-worker"
+primary_region = "sea"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
+
+# Secrets to set with `fly secrets set ...`:
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+#   ANTHROPIC_API_KEY
+#   GOOGLE_OAUTH_CLIENT_ID
+#   GOOGLE_OAUTH_CLIENT_SECRET
