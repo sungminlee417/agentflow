@@ -229,6 +229,7 @@ export function ChatView({
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   // When the server passes fresh initialMessages (e.g. router.refresh
@@ -253,6 +254,22 @@ export function ChatView({
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [historyBlocks, streamBlocks, pendingUserText]);
+
+  async function deleteChat() {
+    if (!convoId || deleting || pending) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/conversations/${convoId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      router.push("/chat");
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setDeleting(false);
+    }
+  }
 
   function handleStreamEvent(event: Record<string, unknown>) {
     const type = String(event.type ?? "");
@@ -440,8 +457,19 @@ export function ChatView({
 
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-neutral-950">
-      <header className="border-b border-neutral-200 px-6 py-3 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-        {title ?? (conversationId ? "Conversation" : "New chat")}
+      <header className="flex items-center justify-between border-b border-neutral-200 px-6 py-3 dark:border-neutral-800">
+        <span className="text-sm text-neutral-500 dark:text-neutral-400">
+          {title ?? (conversationId ? "Conversation" : "New chat")}
+        </span>
+        {convoId && (
+          <button
+            onClick={deleteChat}
+            disabled={deleting || pending}
+            className="rounded-md px-3 py-1.5 text-xs text-neutral-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {deleting ? "Deleting…" : "Delete chat"}
+          </button>
+        )}
       </header>
 
       <div className="flex-1 overflow-y-auto">
