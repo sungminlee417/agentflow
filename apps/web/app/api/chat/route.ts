@@ -1,10 +1,28 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { generateText, type ModelMessage } from "ai";
+import { streamText, stepCountIs, type ModelMessage } from "ai";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { decrypt } from "@/lib/crypto";
 import { getModel, isProvider } from "@/lib/ai-providers";
+import { buildToolsForUser } from "@/lib/tools";
 
 type IncomingMessage = { role: "user" | "assistant"; content: string };
+
+const MAX_STEPS = 12;
+
+function systemPromptFor(connected: string[]): string {
+  const lines = [
+    "You are agentflow, a personal assistant with access to the user's connected tools.",
+    "Be concise. When using tools, explain what you're about to do in one short sentence, call the tool, then describe what came back.",
+    "Never invent data — if you don't know something, call a tool or ask.",
+  ];
+  if (connected.includes("github")) {
+    lines.push(
+      "",
+      "GitHub: when proposing code changes, always read the existing file(s) first with github_get_file, then use github_create_pr to open a PR. Use a clear branch name like `agent/<short-description>`. Always summarize the diff in the PR body.",
+    );
+  }
+  return lines.join("\n");
+}
 
 export async function POST(req: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -26,8 +44,7 @@ export async function POST(req: NextRequest) {
     return new NextResponse("last message must be from user", { status: 400 });
   }
 
-  // Pick the first configured provider key. Per-conversation provider
-  // selection comes later.
+  // Resolve provider key (BYOK, first configured).
   const { data: keys } = await supabase
     .from("user_api_keys")
     .select("provider, encrypted_key")
@@ -55,6 +72,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Resolve tools from the user's connected integrations.
+  const { tools, connected } = await buildToolsForUser(supabase, user.id);
+
   // Get-or-create the conversation row.
   let convoId = body.conversation_id;
   if (!convoId) {
@@ -71,10 +91,11 @@ export async function POST(req: NextRequest) {
     }
     convoId = created.id;
   }
+  const conversationId: string = convoId!;
 
-  // Persist the user's new message.
+  // Persist the user's new message immediately.
   const { error: userInsertErr } = await supabase.from("messages").insert({
-    conversation_id: convoId,
+    conversation_id: conversationId,
     role: "user",
     content_json: lastUser.content,
   });
@@ -82,57 +103,56 @@ export async function POST(req: NextRequest) {
     return new NextResponse(userInsertErr.message, { status: 500 });
   }
 
-  // Call the model.
   const model = getModel(provider, apiKey);
   const modelMessages: ModelMessage[] = body.messages.map((m) => ({
     role: m.role,
     content: m.content,
   }));
 
-  let assistantText: string;
-  let inputTokens: number | null = null;
-  let outputTokens: number | null = null;
-  try {
-    const result = await generateText({
-      model,
-      messages: modelMessages,
-    });
-    assistantText = result.text;
-    inputTokens = result.usage?.inputTokens ?? null;
-    outputTokens = result.usage?.outputTokens ?? null;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return new NextResponse(`Provider error: ${message}`, { status: 502 });
-  }
-
-  // Persist the assistant message.
-  const { data: asstRow, error: asstErr } = await supabase
-    .from("messages")
-    .insert({
-      conversation_id: convoId,
-      role: "assistant",
-      content_json: assistantText,
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-    })
-    .select("id")
-    .single();
-  if (asstErr || !asstRow) {
-    return new NextResponse(asstErr?.message ?? "Failed to store reply", {
-      status: 500,
-    });
-  }
-
-  // Title the conversation from the first user message (cheap heuristic).
   const isFirstTurn = body.messages.length <= 1;
-  const updates: { updated_at: string; title?: string } = {
-    updated_at: new Date().toISOString(),
-  };
-  if (isFirstTurn) updates.title = lastUser.content.slice(0, 80);
-  await supabase.from("conversations").update(updates).eq("id", convoId);
+  const conversationTitle = isFirstTurn ? lastUser.content.slice(0, 80) : null;
 
-  return NextResponse.json({
-    conversation_id: convoId,
-    assistant: { id: asstRow.id, text: assistantText },
+  const result = streamText({
+    model,
+    system: systemPromptFor(connected),
+    messages: modelMessages,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tools: tools as any,
+    stopWhen: stepCountIs(MAX_STEPS),
+    onFinish: async ({ response }) => {
+      // response.messages contains every turn generated this request:
+      // assistant text + tool_call parts, plus tool result messages.
+      // Persist all of them so the conversation can resume with full
+      // fidelity on the next user turn.
+      const rows = response.messages.map((m) => ({
+        conversation_id: conversationId,
+        role: m.role,
+        content_json: m.content as unknown,
+      }));
+      if (rows.length > 0) {
+        const { error: insertErr } = await supabase
+          .from("messages")
+          .insert(rows);
+        if (insertErr) {
+          console.error("Persist agent messages failed:", insertErr);
+        }
+      }
+
+      const updates: { updated_at: string; title?: string } = {
+        updated_at: new Date().toISOString(),
+      };
+      if (conversationTitle) updates.title = conversationTitle;
+      await supabase
+        .from("conversations")
+        .update(updates)
+        .eq("id", conversationId);
+    },
+    onError: ({ error }) => {
+      console.error("Stream error:", error);
+    },
+  });
+
+  return result.toUIMessageStreamResponse({
+    headers: { "X-Conversation-Id": conversationId },
   });
 }

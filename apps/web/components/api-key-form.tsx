@@ -54,11 +54,13 @@ export function ApiKeyForm({
   return (
     <form
       onSubmit={save}
-      className="rounded-lg border border-neutral-800 bg-neutral-950 p-4"
+      className="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-950"
     >
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-medium">{label}</h3>
+          <h3 className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+            {label}
+          </h3>
           <p className="mt-0.5 text-xs text-neutral-500">
             {existingLast4
               ? `Configured · ends in ${existingLast4}`
@@ -69,7 +71,7 @@ export function ApiKeyForm({
           <button
             type="button"
             onClick={remove}
-            className="text-xs text-neutral-400 transition hover:text-red-400"
+            className="text-xs text-neutral-500 transition hover:text-red-500 dark:text-neutral-400 dark:hover:text-red-400"
           >
             Remove
           </button>
@@ -83,12 +85,12 @@ export function ApiKeyForm({
           placeholder={keyHint}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className="flex-1 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+          className="flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
         />
         <button
           type="submit"
           disabled={status === "saving" || value.length === 0}
-          className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition hover:bg-neutral-200 disabled:opacity-50"
+          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
         >
           {status === "saving"
             ? "Saving…"
@@ -100,7 +102,9 @@ export function ApiKeyForm({
         </button>
       </div>
 
-      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      {error && (
+        <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>
+      )}
     </form>
   );
 }

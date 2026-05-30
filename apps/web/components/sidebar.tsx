@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 type ConversationSummary = {
   id: string;
@@ -28,11 +29,11 @@ export function Sidebar({
   }
 
   return (
-    <aside className="flex h-screen flex-col border-r border-neutral-800 bg-neutral-950">
-      <div className="border-b border-neutral-800 p-3">
+    <aside className="flex h-screen flex-col border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950">
+      <div className="border-b border-neutral-200 p-3 dark:border-neutral-800">
         <Link
           href="/chat"
-          className="block rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-center text-sm font-medium transition hover:bg-neutral-800"
+          className="block rounded-md border border-neutral-300 bg-white px-3 py-2 text-center text-sm font-medium text-neutral-900 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
         >
           + New chat
         </Link>
@@ -54,8 +55,8 @@ export function Sidebar({
                     href={href}
                     className={`block truncate rounded-md px-3 py-2 text-sm transition ${
                       active
-                        ? "bg-neutral-800 text-white"
-                        : "text-neutral-300 hover:bg-neutral-900"
+                        ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
+                        : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
                     }`}
                   >
                     {c.title ?? "Untitled"}
@@ -67,9 +68,9 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="border-t border-neutral-800 p-3 text-sm">
+      <div className="border-t border-neutral-200 p-3 text-sm dark:border-neutral-800">
         {!hasAnyKey && (
-          <div className="mb-3 rounded-md border border-amber-900 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+          <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
             Add an API key in Settings to start chatting.
           </div>
         )}
@@ -77,15 +78,16 @@ export function Sidebar({
           href="/settings"
           className={`block rounded-md px-3 py-2 transition ${
             pathname === "/settings"
-              ? "bg-neutral-800 text-white"
-              : "text-neutral-300 hover:bg-neutral-900"
+              ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
+              : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
           }`}
         >
           Settings
         </Link>
+        <ThemeToggle />
         <button
           onClick={signOut}
-          className="mt-1 block w-full rounded-md px-3 py-2 text-left text-neutral-400 transition hover:bg-neutral-900"
+          className="mt-1 block w-full rounded-md px-3 py-2 text-left text-neutral-500 transition hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900"
         >
           Sign out
         </button>

@@ -24,11 +24,19 @@ export async function POST(request: NextRequest) {
     return new NextResponse("key looks too short", { status: 400 });
   }
 
+  let encrypted: string;
+  try {
+    encrypted = encrypt(trimmed);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Encryption failed";
+    return new NextResponse(message, { status: 500 });
+  }
+
   const { error } = await supabase.from("user_api_keys").upsert(
     {
       user_id: user.id,
       provider: body.provider,
-      encrypted_key: encrypt(trimmed),
+      encrypted_key: encrypted,
       key_last4: last4(trimmed),
       updated_at: new Date().toISOString(),
     },
