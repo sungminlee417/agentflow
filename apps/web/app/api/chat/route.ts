@@ -18,7 +18,10 @@ function systemPromptFor(connected: string[]): string {
   if (connected.includes("github")) {
     lines.push(
       "",
-      "GitHub: when proposing code changes, always read the existing file(s) first with github_get_file, then use github_create_pr to open a PR. Use a clear branch name like `agent/<short-description>`. Always summarize the diff in the PR body.",
+      "GitHub workflow:",
+      "- When proposing code changes, always read the existing file(s) first with github_get_file, then use github_create_pr to open a PR. Use a clear branch name like `agent/<short-description>`. Summarize the diff in the PR body.",
+      "- For issues: use github_list_issues to find work, github_get_issue (with the issue number) to read full context including comments, and only then act. When you open a PR that addresses an issue, reference it in the PR body (`Closes #N`) and consider posting a github_post_issue_comment linking the PR.",
+      "- Don't open a PR or post a comment without first explaining your plan to the user in chat and getting at least implicit consent (e.g. the user asked for it).",
     );
   }
   return lines.join("\n");

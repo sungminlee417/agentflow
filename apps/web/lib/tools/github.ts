@@ -208,6 +208,131 @@ export function buildGitHubTools(token: string) {
         return { url: pr.html_url, number: pr.number };
       },
     }),
+
+    github_list_issues: tool({
+      description:
+        "List issues on a repo. By default returns OPEN issues, excluding pull requests. Use to discover work to do.",
+      inputSchema: z.object({
+        repo: z.string().describe('Repo in "owner/name" form'),
+        state: z.enum(["open", "closed", "all"]).default("open"),
+        labels: z
+          .string()
+          .optional()
+          .describe("Comma-separated list of label names to filter by"),
+        limit: z.number().int().min(1).max(50).default(20),
+      }),
+      execute: async ({ repo, state, labels, limit }) => {
+        const params = new URLSearchParams({
+          state,
+          per_page: String(limit),
+          sort: "updated",
+        });
+        if (labels) params.set("labels", labels);
+        const items = (await gh(
+          token,
+          `/repos/${repo}/issues?${params.toString()}`,
+        )) as Array<{
+          number: number;
+          title: string;
+          state: string;
+          body: string | null;
+          html_url: string;
+          user: { login: string } | null;
+          labels: Array<{ name: string }>;
+          created_at: string;
+          updated_at: string;
+          comments: number;
+          pull_request?: unknown;
+        }>;
+        return items
+          .filter((i) => !i.pull_request) // /issues includes PRs; drop them
+          .map((i) => ({
+            number: i.number,
+            title: i.title,
+            state: i.state,
+            url: i.html_url,
+            author: i.user?.login ?? null,
+            labels: i.labels.map((l) => l.name),
+            comments: i.comments,
+            updated_at: i.updated_at,
+            body_preview: i.body ? i.body.slice(0, 280) : null,
+          }));
+      },
+    }),
+
+    github_get_issue: tool({
+      description:
+        "Read a single issue including its full body and all comments. Use before acting on an issue to understand the full context.",
+      inputSchema: z.object({
+        repo: z.string().describe('Repo in "owner/name" form'),
+        number: z.number().int().describe("Issue number"),
+      }),
+      execute: async ({ repo, number }) => {
+        const [issue, comments] = (await Promise.all([
+          gh(token, `/repos/${repo}/issues/${number}`),
+          gh(token, `/repos/${repo}/issues/${number}/comments?per_page=100`),
+        ])) as [
+          {
+            number: number;
+            title: string;
+            body: string | null;
+            state: string;
+            html_url: string;
+            user: { login: string } | null;
+            labels: Array<{ name: string }>;
+            created_at: string;
+            updated_at: string;
+            pull_request?: unknown;
+          },
+          Array<{
+            user: { login: string } | null;
+            body: string | null;
+            created_at: string;
+          }>,
+        ];
+        if (issue.pull_request) {
+          throw new Error(`#${number} is a pull request, not an issue.`);
+        }
+        return {
+          number: issue.number,
+          title: issue.title,
+          body: issue.body ?? "",
+          state: issue.state,
+          url: issue.html_url,
+          author: issue.user?.login ?? null,
+          labels: issue.labels.map((l) => l.name),
+          created_at: issue.created_at,
+          updated_at: issue.updated_at,
+          comments: comments.map((c) => ({
+            author: c.user?.login ?? null,
+            body: c.body ?? "",
+            created_at: c.created_at,
+          })),
+        };
+      },
+    }),
+
+    github_post_issue_comment: tool({
+      description:
+        "Post a comment on a GitHub issue. Use to acknowledge an issue you're working on, or to link a PR you just opened.",
+      inputSchema: z.object({
+        repo: z.string().describe('Repo in "owner/name" form'),
+        number: z.number().int().describe("Issue number"),
+        body: z.string().describe("Markdown body of the comment"),
+      }),
+      execute: async ({ repo, number, body }) => {
+        const data = (await gh(
+          token,
+          `/repos/${repo}/issues/${number}/comments`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ body }),
+          },
+        )) as { id: number; html_url: string };
+        return { id: data.id, url: data.html_url };
+      },
+    }),
   };
 }
 

@@ -2,6 +2,11 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { PROVIDERS } from "@/lib/ai-providers";
 import { ApiKeyForm } from "@/components/api-key-form";
 import { GitHubConnect } from "@/components/github-connect";
+import {
+  AutomationsSection,
+  type AutomationRow,
+  type AutomationRunRow,
+} from "@/components/automations-section";
 
 export default async function SettingsPage({
   searchParams,
@@ -9,11 +14,27 @@ export default async function SettingsPage({
   searchParams: Promise<{ connected?: string; error?: string }>;
 }) {
   const supabase = await createSupabaseServerClient();
-  const [{ data: keys }, { data: integrations }] = await Promise.all([
+  const [
+    { data: keys },
+    { data: integrations },
+    { data: automations },
+    { data: runs },
+  ] = await Promise.all([
     supabase
       .from("user_api_keys")
       .select("provider, key_last4, updated_at"),
     supabase.from("integrations").select("provider, scopes"),
+    supabase
+      .from("automations")
+      .select("id, type, config, enabled, last_run_at, created_at")
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("automation_runs")
+      .select(
+        "id, automation_id, issue_number, status, pr_url, pr_number, error, started_at, finished_at",
+      )
+      .order("started_at", { ascending: false })
+      .limit(100),
   ]);
 
   const keysByProvider = new Map(
@@ -83,6 +104,12 @@ export default async function SettingsPage({
           />
         </div>
       </section>
+
+      <AutomationsSection
+        automations={(automations ?? []) as AutomationRow[]}
+        runs={(runs ?? []) as AutomationRunRow[]}
+        githubConnected={!!github}
+      />
     </div>
   );
 }
