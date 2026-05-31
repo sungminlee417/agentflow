@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { encrypt } from "@agentflow/core";
+import { encrypt, managerForProvider } from "@agentflow/core";
 
 // Finish the GitHub OAuth flow:
 //   1. Verify state matches the cookie we set in /start
@@ -24,9 +24,17 @@ export async function GET(request: NextRequest) {
   const state = url.searchParams.get("state");
   const cookieState = request.cookies.get(STATE_COOKIE)?.value;
 
+  // Where to land the user after success or error — the manager that
+  // owns this provider (e.g. /managers/code for github), falling back
+  // to /settings if no manager claims it.
+  const managerLanding =
+    managerForProvider("github")?.slug
+      ? `/managers/${managerForProvider("github")!.slug}`
+      : "/settings";
+
   if (!code || !state || state !== cookieState) {
     return NextResponse.redirect(
-      new URL("/settings?error=oauth_state_mismatch", request.url),
+      new URL(`${managerLanding}?error=oauth_state_mismatch`, request.url),
     );
   }
 
@@ -68,7 +76,7 @@ export async function GET(request: NextRequest) {
     const errorMsg = tokenData?.error_description ?? tokenData?.error ?? "unknown";
     return NextResponse.redirect(
       new URL(
-        `/settings?error=${encodeURIComponent(`github_exchange_failed:${errorMsg}`)}`,
+        `${managerLanding}?error=${encodeURIComponent(`github_exchange_failed:${errorMsg}`)}`,
         request.url,
       ),
     );
@@ -96,14 +104,14 @@ export async function GET(request: NextRequest) {
   if (error) {
     return NextResponse.redirect(
       new URL(
-        `/settings?error=${encodeURIComponent("store_failed:" + error.message)}`,
+        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
         request.url,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    new URL("/settings?connected=github", request.url),
+    new URL(`${managerLanding}?connected=github`, request.url),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { MANAGERS } from "@agentflow/core";
 
 type ConversationSummary = {
   id: string;
@@ -30,6 +31,14 @@ export function Sidebar({
     router.refresh();
   }
 
+  function topLinkClass(href: string) {
+    return `block rounded-md px-3 py-2 text-sm transition ${
+      pathname === href
+        ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
+        : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
+    }`;
+  }
+
   return (
     <aside className="flex h-full flex-col border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950">
       <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-800">
@@ -43,11 +52,7 @@ export function Sidebar({
         <Link
           href="/activity"
           onClick={onClose}
-          className={`block rounded-md px-3 py-2 text-center text-sm transition ${
-            pathname === "/activity"
-              ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
-              : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
-          }`}
+          className={topLinkClass("/activity")}
         >
           Activity
         </Link>
@@ -83,6 +88,34 @@ export function Sidebar({
         )}
       </div>
 
+      <div className="border-t border-neutral-200 p-3 text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
+        Managers
+      </div>
+      <nav className="space-y-1 px-3 pb-3">
+        {MANAGERS.map((m) => {
+          const href = `/managers/${m.slug}`;
+          const active = pathname === href;
+          const isComingSoon = m.status === "coming_soon";
+          return (
+            <Link
+              key={m.slug}
+              href={href}
+              onClick={onClose}
+              className={`flex items-center justify-between rounded-md px-3 py-2 text-sm transition ${
+                active
+                  ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
+                  : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
+              }`}
+            >
+              <span>{m.label}</span>
+              {isComingSoon && (
+                <span className="text-[10px] text-neutral-500">soon</span>
+              )}
+            </Link>
+          );
+        })}
+      </nav>
+
       <div className="border-t border-neutral-200 p-3 text-sm dark:border-neutral-800">
         {!hasAnyKey && (
           <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
@@ -92,11 +125,7 @@ export function Sidebar({
         <Link
           href="/settings"
           onClick={onClose}
-          className={`block rounded-md px-3 py-2 transition ${
-            pathname === "/settings"
-              ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
-              : "text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
-          }`}
+          className={topLinkClass("/settings")}
         >
           Settings
         </Link>

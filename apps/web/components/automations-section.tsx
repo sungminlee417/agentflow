@@ -85,6 +85,18 @@ export function AutomationsSection({
     if (res.ok) router.refresh();
   }
 
+  async function deleteRun(id: string, status: AutomationRunRow["status"]) {
+    const confirmMsg =
+      status === "running"
+        ? "This run still shows as running. Delete it anyway? Usually fine for stuck runs."
+        : "Delete this run? The next worker tick will retry the issue.";
+    if (!confirm(confirmMsg)) return;
+    const res = await fetch(`/api/automation-runs?id=${id}`, {
+      method: "DELETE",
+    });
+    if (res.ok) router.refresh();
+  }
+
   async function runNow() {
     setRunning(true);
     setError(null);
@@ -223,16 +235,26 @@ export function AutomationsSection({
                             </span>
                             {r.error && ` · ${r.error.slice(0, 80)}`}
                           </span>
-                          {r.pr_url && (
-                            <a
-                              href={r.pr_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:underline dark:text-blue-400"
+                          <span className="flex items-center gap-2">
+                            {r.pr_url && (
+                              <a
+                                href={r.pr_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline dark:text-blue-400"
+                              >
+                                PR #{r.pr_number}
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => deleteRun(r.id, r.status)}
+                              className="text-neutral-400 transition hover:text-red-500 dark:hover:text-red-400"
+                              title="Delete this run (next tick will retry the issue)"
                             >
-                              PR #{r.pr_number}
-                            </a>
-                          )}
+                              Delete
+                            </button>
+                          </span>
                         </li>
                       ))}
                   </ul>

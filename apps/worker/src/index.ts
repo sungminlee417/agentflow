@@ -105,12 +105,13 @@ async function processAutomation(a: Automation): Promise<void> {
   const realIssues = issues.filter((i) => !i.pull_request);
   if (realIssues.length === 0) return;
 
-  const { data: doneRuns } = await supabase
+  // Skip issues with any existing run (done, failed, or running). To
+  // retry, the user deletes the row from the dashboard.
+  const { data: existingRuns } = await supabase
     .from("automation_runs")
     .select("issue_number")
-    .eq("automation_id", a.id)
-    .eq("status", "done");
-  const handled = new Set((doneRuns ?? []).map((r) => r.issue_number));
+    .eq("automation_id", a.id);
+  const handled = new Set((existingRuns ?? []).map((r) => r.issue_number));
   const next = realIssues.find((i) => !handled.has(i.number));
   if (!next) return;
 

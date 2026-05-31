@@ -123,13 +123,14 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    // Find the oldest open issue with no successful run for this automation.
-    const { data: doneRuns } = await supabase
+    // Find the oldest open issue with no existing run for this
+    // automation (done, failed, or running all count). To retry, the
+    // user deletes the row from the dashboard.
+    const { data: existingRuns } = await supabase
       .from("automation_runs")
       .select("issue_number")
-      .eq("automation_id", automation.id)
-      .eq("status", "done");
-    const handled = new Set((doneRuns ?? []).map((r) => r.issue_number));
+      .eq("automation_id", automation.id);
+    const handled = new Set((existingRuns ?? []).map((r) => r.issue_number));
 
     const next = realIssues.find((i) => !handled.has(i.number));
     if (!next) {

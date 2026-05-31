@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { managerForAutomationType } from "@agentflow/core";
 
 export type RunRow = {
   id: string;
@@ -123,12 +125,37 @@ export function ActivityFeed({
           );
         },
       )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "automation_runs" },
+        (payload) => {
+          const removedId = (payload.old as { id?: string } | null)?.id;
+          if (!removedId) return;
+          setRuns((prev) => prev.filter((r) => r.id !== removedId));
+        },
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  async function deleteRun(id: string, status: RunRow["status"]) {
+    const confirmMsg =
+      status === "running"
+        ? "This run still shows as running. Delete it anyway? If the worker is genuinely still working, its update will silently fail — usually fine for stuck runs."
+        : "Delete this run? The next worker tick will retry the issue.";
+    if (!confirm(confirmMsg)) return;
+    // Optimistic remove; Realtime DELETE event will also fire.
+    setRuns((prev) => prev.filter((r) => r.id !== id));
+    const res = await fetch(`/api/automation-runs?id=${id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      console.error("delete run failed:", await res.text());
+    }
+  }
 
   const automationsById = useMemo(
     () => new Map(automations.map((a) => [a.id, a])),
@@ -173,8 +200,8 @@ export function ActivityFeed({
       <div className="mt-8">
         {runs.length === 0 ? (
           <div className="rounded-lg border border-dashed border-neutral-300 px-6 py-12 text-center text-sm text-neutral-500 dark:border-neutral-700">
-            No runs yet. Add an automation in Settings and create a GitHub
-            issue on the watched repo — runs will appear here in real time.
+            No runs yet. Open a Manager from the sidebar, add an automation,
+            and runs will appear here in real time.
           </div>
         ) : (
           <ul className="space-y-2">
@@ -182,6 +209,9 @@ export function ActivityFeed({
               const automation = automationsById.get(r.automation_id);
               const repo = automation?.config?.repo ?? "(deleted automation)";
               const duration = formatDuration(r.started_at, r.finished_at);
+              const manager = automation
+                ? managerForAutomationType(automation.type)
+                : undefined;
               return (
                 <li
                   key={r.id}
@@ -189,6 +219,14 @@ export function ActivityFeed({
                 >
                   <div className="flex flex-wrap items-center gap-3">
                     <StatusBadge status={r.status} />
+                    {manager && (
+                      <Link
+                        href={`/managers/${manager.slug}`}
+                        className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-700 transition hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                      >
+                        {manager.label}
+                      </Link>
+                    )}
                     <code className="font-mono text-sm text-neutral-900 dark:text-neutral-100">
                       {repo}
                     </code>
@@ -208,6 +246,14 @@ export function ActivityFeed({
                     <span className="ml-auto text-xs text-neutral-500">
                       {formatRelative(r.started_at)} · {duration}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => deleteRun(r.id, r.status)}
+                      className="text-xs text-neutral-400 transition hover:text-red-500 dark:hover:text-red-400"
+                      title="Delete this run (next tick will retry the issue)"
+                    >
+                      Delete
+                    </button>
                   </div>
 
                   {r.status === "running" && r.last_step && (
