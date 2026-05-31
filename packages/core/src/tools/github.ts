@@ -2,7 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 // Minimal GitHub REST client. Uses fetch directly so we don't pull in
-// Octokit just for three endpoints.
+// Octokit just for a handful of endpoints.
 
 async function gh(
   token: string,
@@ -24,6 +24,36 @@ async function gh(
     throw new Error(`GitHub ${res.status}: ${text.slice(0, 500)}`);
   }
   return text ? JSON.parse(text) : null;
+}
+
+async function ghGraphql<T>(
+  token: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "agentflow",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`GitHub GraphQL ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const body = JSON.parse(text) as { data?: T; errors?: unknown[] };
+  if (body.errors && body.errors.length > 0) {
+    throw new Error(
+      `GitHub GraphQL: ${JSON.stringify(body.errors).slice(0, 500)}`,
+    );
+  }
+  if (!body.data) {
+    throw new Error("GitHub GraphQL: empty response");
+  }
+  return body.data;
 }
 
 type GhContent = {
@@ -331,6 +361,135 @@ export function buildGitHubTools(token: string) {
           },
         )) as { id: number; html_url: string };
         return { id: data.id, url: data.html_url };
+      },
+    }),
+
+    github_project_set_issue_status: tool({
+      description:
+        "Move an issue across its GitHub Projects (V2) board by changing its Status column. Looks up every project board the issue belongs to, finds the Status field, and sets the option whose name matches `status` (case-insensitive). Use names like 'In Progress' / 'In Review' / 'Done'. If the option doesn't exist on a board, the tool returns the available option names so you can retry with a valid one.",
+      inputSchema: z.object({
+        repo: z.string().describe('Repo in "owner/name" form'),
+        issue_number: z.number().int(),
+        status: z
+          .string()
+          .describe(
+            "Status column name (e.g. 'In Progress'). Matched case-insensitively against the board's Status options.",
+          ),
+      }),
+      execute: async ({ repo, issue_number, status }) => {
+        const [owner, name] = repo.split("/");
+        if (!owner || !name) {
+          throw new Error('repo must be "owner/name"');
+        }
+
+        type StatusField = {
+          id: string;
+          name: string;
+          options: Array<{ id: string; name: string }>;
+        };
+        type ProjectItem = {
+          id: string;
+          project: {
+            id: string;
+            title: string;
+            fields: { nodes: Array<StatusField | null> };
+          };
+        };
+        const data = await ghGraphql<{
+          repository: {
+            issue: { projectItems: { nodes: ProjectItem[] } } | null;
+          } | null;
+        }>(
+          token,
+          `query($owner: String!, $name: String!, $number: Int!) {
+            repository(owner: $owner, name: $name) {
+              issue(number: $number) {
+                projectItems(first: 10) {
+                  nodes {
+                    id
+                    project {
+                      id
+                      title
+                      fields(first: 30) {
+                        nodes {
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options {
+                              id
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }`,
+          { owner, name, number: issue_number },
+        );
+
+        const items = data.repository?.issue?.projectItems?.nodes ?? [];
+        if (items.length === 0) {
+          return {
+            updated: [],
+            message: `Issue #${issue_number} is not on any project board.`,
+          };
+        }
+
+        const results: Array<{
+          project: string;
+          status?: string;
+          skipped?: string;
+        }> = [];
+
+        for (const item of items) {
+          const statusField = item.project.fields.nodes.find(
+            (f): f is StatusField =>
+              !!f && f.name === "Status" && Array.isArray(f.options),
+          );
+          if (!statusField) {
+            results.push({
+              project: item.project.title,
+              skipped: "no Status field on this board",
+            });
+            continue;
+          }
+          const want = status.toLowerCase();
+          const option = statusField.options.find(
+            (o) => o.name.toLowerCase() === want,
+          );
+          if (!option) {
+            results.push({
+              project: item.project.title,
+              skipped: `no Status option matching "${status}". Available: ${statusField.options.map((o) => o.name).join(", ")}`,
+            });
+            continue;
+          }
+
+          await ghGraphql(
+            token,
+            `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $projectId,
+                itemId: $itemId,
+                fieldId: $fieldId,
+                value: { singleSelectOptionId: $optionId }
+              }) { projectV2Item { id } }
+            }`,
+            {
+              projectId: item.project.id,
+              itemId: item.id,
+              fieldId: statusField.id,
+              optionId: option.id,
+            },
+          );
+          results.push({ project: item.project.title, status: option.name });
+        }
+
+        return { updated: results };
       },
     }),
   };

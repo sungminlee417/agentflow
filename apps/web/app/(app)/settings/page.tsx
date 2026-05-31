@@ -22,7 +22,7 @@ export default async function SettingsPage({
   ] = await Promise.all([
     supabase
       .from("user_api_keys")
-      .select("provider, key_last4, updated_at"),
+      .select("provider, key_last4, model, updated_at"),
     supabase.from("integrations").select("provider, scopes"),
     supabase
       .from("automations")
@@ -75,7 +75,9 @@ export default async function SettingsPage({
 
         <div className="mt-6 space-y-4">
           {PROVIDERS.map((p) => {
-            const existing = keysByProvider.get(p.name);
+            const existing = keysByProvider.get(p.name) as
+              | { key_last4: string; model: string | null }
+              | undefined;
             return (
               <ApiKeyForm
                 key={p.name}
@@ -83,6 +85,7 @@ export default async function SettingsPage({
                 label={p.label}
                 keyHint={p.keyHint}
                 existingLast4={existing?.key_last4 ?? null}
+                existingModel={existing?.model ?? null}
               />
             );
           })}

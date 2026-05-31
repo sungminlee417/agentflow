@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { encrypt, last4, isProvider } from "@agentflow/core";
+import { encrypt, last4, isProvider, isValidModelFor } from "@agentflow/core";
 
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
   if (!user) return new NextResponse("Unauthorized", { status: 401 });
 
   const body = (await request.json().catch(() => null)) as
-    | { provider?: string; key?: string }
+    | { provider?: string; key?: string; model?: string | null }
     | null;
   if (!body?.provider || !body?.key) {
     return new NextResponse("provider and key are required", { status: 400 });
@@ -21,6 +21,9 @@ export async function POST(request: NextRequest) {
   const trimmed = body.key.trim();
   if (trimmed.length < 8) {
     return new NextResponse("key looks too short", { status: 400 });
+  }
+  if (body.model && !isValidModelFor(body.provider, body.model)) {
+    return new NextResponse("unknown model for provider", { status: 400 });
   }
 
   let encrypted: string;
@@ -37,10 +40,41 @@ export async function POST(request: NextRequest) {
       provider: body.provider,
       encrypted_key: encrypted,
       key_last4: last4(trimmed),
+      model: body.model ?? null,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id,provider" },
   );
+
+  if (error) return new NextResponse(error.message, { status: 500 });
+  return NextResponse.json({ ok: true });
+}
+
+export async function PATCH(request: NextRequest) {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return new NextResponse("Unauthorized", { status: 401 });
+
+  const body = (await request.json().catch(() => null)) as
+    | { provider?: string; model?: string | null }
+    | null;
+  if (!body?.provider || !isProvider(body.provider)) {
+    return new NextResponse("unknown provider", { status: 400 });
+  }
+  if (body.model && !isValidModelFor(body.provider, body.model)) {
+    return new NextResponse("unknown model for provider", { status: 400 });
+  }
+
+  const { error } = await supabase
+    .from("user_api_keys")
+    .update({
+      model: body.model ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", user.id)
+    .eq("provider", body.provider);
 
   if (error) return new NextResponse(error.message, { status: 500 });
   return NextResponse.json({ ok: true });

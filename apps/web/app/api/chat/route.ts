@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
   // Resolve provider key (BYOK, first configured).
   const { data: keys } = await supabase
     .from("user_api_keys")
-    .select("provider, encrypted_key")
+    .select("provider, encrypted_key, model")
     .order("created_at", { ascending: true })
     .limit(1);
 
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  const { provider, encrypted_key } = keys[0]!;
+  const { provider, encrypted_key, model: userModel } = keys[0]!;
   if (!isProvider(provider)) {
     return new NextResponse(`Unknown provider: ${provider}`, { status: 500 });
   }
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
     return new NextResponse(userInsertErr.message, { status: 500 });
   }
 
-  const model = getModel(provider, apiKey);
+  const model = getModel(provider, apiKey, userModel);
   const modelMessages: ModelMessage[] = body.messages.map((m) => ({
     role: m.role,
     content: m.content,

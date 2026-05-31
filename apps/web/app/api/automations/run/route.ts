@@ -168,6 +168,12 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       repo,
       issueNumber: next.number,
+      onStep: async ({ count, description }) => {
+        await supabase
+          .from("automation_runs")
+          .update({ step_count: count, last_step: description })
+          .eq("id", run.id);
+      },
     });
 
     await supabase

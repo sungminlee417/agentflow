@@ -8,7 +8,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 //   3. Redirect to GitHub's authorize endpoint
 
 const STATE_COOKIE = "gh_oauth_state";
-const SCOPES = ["repo"]; // full repo for read + write; we can scope down later
+const SCOPES = ["repo", "project"]; // repo: code/issues/PRs · project: ProjectsV2 board updates
 
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
