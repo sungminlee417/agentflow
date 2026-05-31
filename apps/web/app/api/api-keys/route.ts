@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { encrypt, last4 } from "@/lib/crypto";
-import { isProvider } from "@/lib/ai-providers";
+import { encrypt, last4, isProvider } from "@agentflow/core";
 
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();

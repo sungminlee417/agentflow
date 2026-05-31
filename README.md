@@ -1,112 +1,144 @@
 # agentflow
 
-Background Claude agents that analyze content and run domain-specific
-workflows. Phase 1 focuses on **YouTube** (analyze your own channel and
-produce recommendations to grow views). The architecture is built around
-a pluggable **domain** abstraction so additional domains (e.g. coachflow)
-slot in later without rewriting the platform.
+Personal AI assistant with pluggable tools. Chat-driven with multi-provider
+BYOK (Anthropic, OpenAI, Google), GitHub integration for reading code and
+opening PRs, and **automations** — standing instructions for an autonomous
+agent to watch GitHub repos and act on new issues.
 
 ## Highlights
 
-- **Four job kinds for YouTube**: diagnostic report, concrete
-  recommendations, new content ideas, weekly monitor digest.
-- **Live agent logs** stream into the dashboard via Supabase Realtime.
-- **Scheduled jobs** via a cron-style `schedules` table; a tick endpoint
-  enqueues due schedules every minute.
-- **Pluggable domains**: every domain exports `tools`, `prompts`, and
-  `jobKinds` against a single `DomainPlugin` interface in
-  [`packages/core`](packages/core/src/types.ts).
+- **Chat UI** with streaming text, live tool-call rendering, and markdown.
+- **BYOK** for AI providers — your API key, encrypted at rest with
+  AES-256-GCM, never stored in plain text.
+- **GitHub OAuth** integration: connect any account, agent reads repos,
+  files, directories, issues, and opens PRs on your behalf.
+- **Automations** — "watch repo X for new issues, work on each one." The
+  background worker polls every 30s and runs an autonomous agent to read
+  each issue, propose a fix, and open a PR (or post a clarification
+  comment if it's unclear).
 
 ## Project layout
 
 ```
 apps/
   web/                  Next.js 16 dashboard (Vercel)
-  worker/               Always-on Node poller (Fly.io)
+  worker/               Always-on polling worker (Fly.io)
 packages/
-  core/                 Shared types, domain plugin interface, registry
-  domain-youtube/       YouTube plugin: tools + prompts
-  domain-coachflow/     Placeholder for the future coachflow plugin
+  core/                 Shared agent runner, AI providers, GitHub tools,
+                        crypto. Used by both apps.
 supabase/
   migrations/           Numbered, idempotent SQL migrations
 ```
 
 ## Getting started
 
-Prerequisites: Node 20+, pnpm 9+, a Supabase project, an Anthropic API
-key, a Google Cloud OAuth client with YouTube Data + Analytics scopes.
+Prerequisites: Node 20+, pnpm 9+, a Supabase project.
 
 ```bash
-# install
 pnpm install
-
-# copy and fill env vars
 cp .env.example .env.local
+# fill in the env vars (see below)
 
-# apply the migration: easiest is to push to GitHub — the Supabase GitHub
-# integration applies anything new in supabase/migrations/ automatically.
-# Locally you can also run:
-#   supabase db push
-# or paste the SQL into the dashboard's SQL editor.
+# apply migrations: push to GitHub → Supabase auto-deploys via the
+# integration. Locally: paste SQL into the Supabase SQL Editor or run
+# `supabase db push` if you have the CLI linked.
 
-# run the dashboard
-pnpm dev:web
+# run the web app
+pnpm dev:web                # http://localhost:3000
 
-# run the worker (separate terminal)
+# in another terminal, run the worker (only needed for automations)
 pnpm dev:worker
 ```
 
-The worker requires `SUPABASE_SERVICE_ROLE_KEY` (it bypasses RLS to
-claim jobs and write events/artifacts on behalf of users).
+### Env vars
+
+In `.env.local` at the repo root (the web app symlinks to it):
+
+```
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...   # or legacy JWT anon key
+SUPABASE_URL=https://<project-ref>.supabase.co     # used by the worker
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_...            # or legacy JWT service-role
+
+# App secret for encrypting user credentials. Generate ONCE per environment.
+# Do not change after you've encrypted any keys, or they become unreadable.
+#   openssl rand -hex 32
+AGENTFLOW_SECRET_KEY=<64 hex chars>
+
+# GitHub OAuth (create at https://github.com/settings/developers)
+# Callback URL: http://localhost:3000/api/oauth/github/callback for dev,
+# https://<vercel-url>/api/oauth/github/callback for prod.
+GITHUB_OAUTH_CLIENT_ID=
+GITHUB_OAUTH_CLIENT_SECRET=
+```
 
 ## Deployment
 
-- **Dashboard** → Vercel (free Hobby plan is sufficient).
-- **Worker** → Fly.io free tier. From `apps/worker/`:
-  ```bash
-  fly launch --no-deploy   # one-time
-  fly secrets set SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... ANTHROPIC_API_KEY=...
-  fly deploy
-  ```
+### Web app — Vercel
+
+1. Push the repo to GitHub.
+2. Vercel → "Add new project" → import the repo. Root directory: `apps/web`.
+3. Project Settings → Environment Variables: paste every var from
+   `.env.local`. **Use a separate GitHub OAuth App with the production
+   callback URL** (`https://<your-vercel-domain>/api/oauth/github/callback`).
+4. Deploy.
+
+### Worker — Fly.io
+
+The worker is what makes automations *automatic*. Without it deployed,
+automations only run when you click "Run now" in the dashboard or run
+`pnpm dev:worker` locally.
+
+From `apps/worker/`:
+
+```bash
+fly launch --no-deploy --name agentflow-worker
+fly secrets set \
+  SUPABASE_URL=https://<project>.supabase.co \
+  SUPABASE_SERVICE_ROLE_KEY=<sb_secret_or_service_role_jwt> \
+  AGENTFLOW_SECRET_KEY=<same value as web app>
+fly deploy
+fly logs              # watch it poll
+```
+
+`POLL_INTERVAL_MS` defaults to 30 seconds; set it as an env in `fly.toml`
+if you want a different cadence.
 
 ## Database
 
-Tables (see [`supabase/migrations/`](supabase/migrations/)):
+Migrations under [`supabase/migrations/`](supabase/migrations/) are
+timestamped and idempotent. The auto-deploy GitHub integration applies
+new ones on every push to `main`.
 
-| table         | purpose                                                |
-| ------------- | ------------------------------------------------------ |
-| `jobs`        | units of work; status flows queued → running → done    |
-| `job_events`  | append-only log stream, fanned out via Realtime        |
-| `artifacts`   | what jobs produce (reports, rewrites, idea briefs)     |
-| `integrations`| per-user OAuth credentials (YouTube, etc.)             |
-| `schedules`   | cron-style recurring job templates                     |
+| table              | purpose                                                |
+| ------------------ | ------------------------------------------------------ |
+| `user_api_keys`    | encrypted BYOK keys (one row per user × provider)      |
+| `integrations`     | encrypted OAuth tokens (GitHub today; YT/etc. later)   |
+| `conversations`    | chat threads                                           |
+| `messages`         | chat turns; stores AI-SDK content blocks verbatim      |
+| `automations`      | standing instructions (e.g. "watch repo X")            |
+| `automation_runs`  | one row per (automation, issue) attempt                |
+| `jobs` / `schedules` | reserved for future use; not active in v1            |
 
-Plus a `claim_next_job()` SECURITY DEFINER function used by the worker
-for atomic, lock-free job claiming via `UPDATE ... FOR UPDATE SKIP LOCKED`.
+RLS is on for every user-owned table. The worker uses the service role
+key to bypass RLS (it acts on behalf of all users, decrypts their
+credentials with `AGENTFLOW_SECRET_KEY`).
 
-Migrations follow agentflow's idempotent conventions:
-`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, RLS policies
-wrapped in `DO $$ ... END $$` blocks. Re-running on a clean DB is a
-no-op.
+## How automations work end-to-end
 
-## Adding a new domain
+1. User signs in to the web app, configures a BYOK key, connects GitHub.
+2. User adds an automation in Settings → Automations: "Watch
+   `owner/repo` for new issues."
+3. **Worker** (Fly.io) polls `automations` every 30s. For each enabled
+   one, it fetches open issues from GitHub.
+4. It skips any issue with a successful run in `automation_runs`.
+5. For the next unhandled issue, it inserts a `running` row, calls the
+   autonomous `runIssueAgent` (which uses the user's stored AI key and
+   GitHub token), and updates the row with the outcome.
+6. The agent reads the issue, explores the repo, opens a PR (or posts a
+   clarification comment), and stops.
 
-1. Create `packages/domain-<slug>/` mirroring `domain-youtube/`.
-2. Implement `DomainPlugin` from [`@agentflow/core`](packages/core/src/types.ts):
-   `slug`, `displayName`, `jobKinds`, `buildTools`, `buildSystemPrompt`,
-   `buildUserPrompt`.
-3. Register it in [`apps/worker/src/index.ts`](apps/worker/src/index.ts) (and
-   eventually in a dashboard registry for the UI).
-4. Add OAuth flow + integration row if the domain needs third-party
-   credentials.
-
-## Status
-
-Phase 1 scaffold is in place. Outstanding:
-
-- [ ] Wire up `@anthropic-ai/claude-agent-sdk` in [`apps/worker/src/runAgent.ts`](apps/worker/src/runAgent.ts)
-- [ ] Implement YouTube tool handlers (replace stubs in [`packages/domain-youtube/src/tools.ts`](packages/domain-youtube/src/tools.ts))
-- [ ] Google OAuth flow + token storage in [`apps/web/app/api/oauth/google/callback/route.ts`](apps/web/app/api/oauth/google/callback/route.ts)
-- [ ] Job detail page with live event subscription
-- [ ] Schedules tick endpoint
-# agentflow
+Each tick processes at most one issue per automation to keep runs short
+and bounded. Click again in the dashboard or wait for the next tick to
+process the next outstanding issue.

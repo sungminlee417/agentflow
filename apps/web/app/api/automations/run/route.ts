@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { decrypt } from "@/lib/crypto";
-import { runIssueAgent } from "@/lib/agents/issue-agent";
+import { decrypt, runIssueAgent } from "@agentflow/core";
 
 // Process new issues for the user's enabled automations.
 //

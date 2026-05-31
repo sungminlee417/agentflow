@@ -11,7 +11,16 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.45",
+    "@ai-sdk/google": "^2.0.27",
+    "@ai-sdk/openai": "^2.0.51",
+    "@supabase/supabase-js": "^2.101.1",
+    "ai": "^5.0.103",
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
+    "@types/node": "^20.19.41",
     "typescript": "^5"
   }
 }

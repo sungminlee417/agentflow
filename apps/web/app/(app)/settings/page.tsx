@@ -1,5 +1,5 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { PROVIDERS } from "@/lib/ai-providers";
+import { PROVIDERS } from "@agentflow/core";
 import { ApiKeyForm } from "@/components/api-key-form";
 import { GitHubConnect } from "@/components/github-connect";
 import {

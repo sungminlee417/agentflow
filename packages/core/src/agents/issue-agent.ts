@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateText, stepCountIs } from "ai";
-import { decrypt } from "@/lib/crypto";
-import { getModel, isProvider } from "@/lib/ai-providers";
-import { buildToolsForUser } from "@/lib/tools";
+import { decrypt } from "../crypto.js";
+import { getModel, isProvider } from "../ai-providers.js";
+import { buildToolsForUser } from "../tools/index.js";
 
 // Autonomous agent run that processes a single GitHub issue end-to-end:
 // reads the issue, explores the repo, opens a PR (or comments asking

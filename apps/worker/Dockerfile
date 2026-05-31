@@ -11,7 +11,6 @@ COPY tsconfig.base.json ./
 # Copy package manifests so install can resolve workspace graph
 COPY apps/worker/package.json ./apps/worker/
 COPY packages/core/package.json ./packages/core/
-COPY packages/domain-youtube/package.json ./packages/domain-youtube/
 
 RUN pnpm install --frozen-lockfile
 

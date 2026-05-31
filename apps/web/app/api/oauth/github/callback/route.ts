@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { encrypt } from "@/lib/crypto";
+import { encrypt } from "@agentflow/core";
 
 // Finish the GitHub OAuth flow:
 //   1. Verify state matches the cookie we set in /start

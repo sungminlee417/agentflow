@@ -1,9 +1,15 @@
 # Fly.io config for the agentflow worker.
 #
 # Free tier: 3 shared-cpu-1x VMs, 256MB RAM each. One always-on VM is
-# plenty for a poll-loop worker. Generated baseline — run
-# `fly launch --no-deploy` once you've created the app to get a real
-# app name and Fly-managed values.
+# plenty for the polling worker.
+#
+# First-time deploy from this directory:
+#   fly launch --no-deploy --name agentflow-worker  # one-time
+#   fly secrets set \
+#     SUPABASE_URL=... \
+#     SUPABASE_SERVICE_ROLE_KEY=... \
+#     AGENTFLOW_SECRET_KEY=...
+#   fly deploy
 
 app = "agentflow-worker"
 primary_region = "sea"
@@ -13,6 +19,7 @@ primary_region = "sea"
 
 [env]
   NODE_ENV = "production"
+  POLL_INTERVAL_MS = "30000"
 
 [[vm]]
   cpu_kind = "shared"
@@ -20,8 +27,7 @@ primary_region = "sea"
   memory_mb = 256
 
 # Secrets to set with `fly secrets set ...`:
-#   SUPABASE_URL
-#   SUPABASE_SERVICE_ROLE_KEY
-#   ANTHROPIC_API_KEY
-#   GOOGLE_OAUTH_CLIENT_ID
-#   GOOGLE_OAUTH_CLIENT_SECRET
+#   SUPABASE_URL                  (https://<ref>.supabase.co)
+#   SUPABASE_SERVICE_ROLE_KEY     (legacy JWT) OR the new sb_secret_... key
+#   AGENTFLOW_SECRET_KEY          (the SAME value as the web app's, so the
+#                                  worker can decrypt user credentials)

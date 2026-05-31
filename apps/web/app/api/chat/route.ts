@@ -1,9 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { streamText, stepCountIs, type ModelMessage } from "ai";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { decrypt } from "@/lib/crypto";
-import { getModel, isProvider } from "@/lib/ai-providers";
-import { buildToolsForUser } from "@/lib/tools";
+import {
+  decrypt,
+  getModel,
+  isProvider,
+  buildToolsForUser,
+} from "@agentflow/core";
 
 type IncomingMessage = { role: "user" | "assistant"; content: string };
 

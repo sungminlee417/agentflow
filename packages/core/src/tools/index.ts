@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { decrypt } from "@/lib/crypto";
-import { buildGitHubTools } from "./github";
+import { decrypt } from "../crypto.js";
+import { buildGitHubTools } from "./github.js";
 
 // Compose the agent's tool set based on which integrations the user
 // has connected. A tool only appears to the model if its credentials
