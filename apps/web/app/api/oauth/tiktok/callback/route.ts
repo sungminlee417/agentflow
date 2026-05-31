@@ -6,7 +6,8 @@ import {
   managerForProvider,
 } from "@agentflow/core";
 
-const STATE_COOKIE = "gh_oauth_state";
+const STATE_COOKIE = "tt_oauth_state";
+const VERIFIER_COOKIE = "tt_oauth_verifier";
 
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -16,47 +17,51 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.redirect(new URL("/login", request.url));
 
   const managerLanding =
-    managerForProvider("github")?.slug
-      ? `/managers/${managerForProvider("github")!.slug}`
+    managerForProvider("tiktok")?.slug
+      ? `/managers/${managerForProvider("tiktok")!.slug}`
       : "/settings";
 
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const cookieState = request.cookies.get(STATE_COOKIE)?.value;
+  const codeVerifier = request.cookies.get(VERIFIER_COOKIE)?.value;
 
-  if (!code || !state || state !== cookieState) {
+  if (!code || !state || state !== cookieState || !codeVerifier) {
     return NextResponse.redirect(
       new URL(`${managerLanding}?error=oauth_state_mismatch`, request.url),
     );
   }
 
-  const creds = await getOAuthCredentials(supabase, user.id, "github");
+  const creds = await getOAuthCredentials(supabase, user.id, "tiktok");
   if (!creds) {
     return NextResponse.redirect(
       new URL(`${managerLanding}?error=oauth_app_not_configured`, request.url),
     );
   }
 
-  const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+  const redirectUri = new URL(
+    "/api/oauth/tiktok/callback",
+    request.url,
+  ).toString();
+
+  const tokenRes = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      client_id: creds.client_id,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_key: creds.client_id,
       client_secret: creds.client_secret,
       code,
-      redirect_uri: new URL(
-        "/api/oauth/github/callback",
-        request.url,
-      ).toString(),
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
     }),
   });
 
   const tokenData = (await tokenRes.json().catch(() => null)) as {
     access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
     scope?: string;
     error?: string;
     error_description?: string;
@@ -66,26 +71,28 @@ export async function GET(request: NextRequest) {
     const errMsg = tokenData?.error_description ?? tokenData?.error ?? "unknown";
     return NextResponse.redirect(
       new URL(
-        `${managerLanding}?error=${encodeURIComponent(`github_exchange_failed:${errMsg}`)}`,
+        `${managerLanding}?error=${encodeURIComponent(`tiktok_exchange_failed:${errMsg}`)}`,
         request.url,
       ),
     );
   }
 
-  const scopes = (tokenData.scope ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const scopes = (tokenData.scope ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const expiresAt = tokenData.expires_in
+    ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+    : null;
 
   const { error } = await supabase.from("integrations").upsert(
     {
       user_id: user.id,
-      domain: "github",
-      provider: "github",
+      domain: "tiktok",
+      provider: "tiktok",
       encrypted_access_token: encrypt(tokenData.access_token),
-      encrypted_refresh_token: null,
+      encrypted_refresh_token: tokenData.refresh_token
+        ? encrypt(tokenData.refresh_token)
+        : null,
       scopes,
-      expires_at: null,
+      expires_at: expiresAt,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id,domain,provider" },
@@ -101,8 +108,9 @@ export async function GET(request: NextRequest) {
   }
 
   const response = NextResponse.redirect(
-    new URL(`${managerLanding}?connected=github`, request.url),
+    new URL(`${managerLanding}?connected=tiktok`, request.url),
   );
   response.cookies.delete(STATE_COOKIE);
+  response.cookies.delete(VERIFIER_COOKIE);
   return response;
 }

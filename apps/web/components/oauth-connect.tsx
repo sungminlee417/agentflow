@@ -1,0 +1,248 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+// Generic OAuth Connect card with a built-in "OAuth app credentials"
+// form. Each user supplies their own OAuth app's client_id +
+// client_secret per provider (BYOK for OAuth) — fall-back to server
+// env vars happens server-side in getOAuthCredentials().
+//
+// Flow:
+//   1. User pastes their client_id + client_secret (or has env fallback)
+//   2. Connect button enables → standard OAuth handshake
+//   3. Disconnect tears down just the user-token side (keeps credentials)
+
+const PROVIDER_LABELS: Record<string, { idLabel: string; secretLabel: string }> = {
+  github: { idLabel: "Client ID", secretLabel: "Client Secret" },
+  youtube: { idLabel: "Client ID", secretLabel: "Client Secret" },
+  tiktok: { idLabel: "Client Key", secretLabel: "Client Secret" },
+  instagram: { idLabel: "App ID", secretLabel: "App Secret" },
+};
+
+export function OAuthConnect({
+  provider,
+  label,
+  description,
+  hint,
+  connected,
+  scopes,
+  credentialsConfigured,
+  credentialsLast4,
+  credentialsSource,
+}: {
+  provider: string;
+  label: string;
+  description?: string;
+  hint?: string;
+  connected: boolean;
+  scopes: string[];
+  credentialsConfigured: boolean;
+  credentialsLast4: string | null;
+  credentialsSource: "user" | "env" | null;
+}) {
+  const router = useRouter();
+  const [working, setWorking] = useState(false);
+  const [showCredsForm, setShowCredsForm] = useState(
+    !credentialsConfigured && !connected,
+  );
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [credStatus, setCredStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [credError, setCredError] = useState<string | null>(null);
+
+  const labels = PROVIDER_LABELS[provider] ?? {
+    idLabel: "Client ID",
+    secretLabel: "Client Secret",
+  };
+
+  async function saveCredentials(e: React.FormEvent) {
+    e.preventDefault();
+    setCredStatus("saving");
+    setCredError(null);
+    const res = await fetch("/api/oauth-credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+    });
+    if (!res.ok) {
+      setCredStatus("error");
+      setCredError((await res.text()) || "Failed to save");
+      return;
+    }
+    setClientId("");
+    setClientSecret("");
+    setCredStatus("saved");
+    setShowCredsForm(false);
+    router.refresh();
+    setTimeout(() => setCredStatus("idle"), 1500);
+  }
+
+  async function deleteCredentials() {
+    if (
+      !confirm(
+        `Remove your saved ${label} OAuth app credentials? If you're already connected, that connection still works until you disconnect.`,
+      )
+    )
+      return;
+    const res = await fetch(`/api/oauth-credentials?provider=${provider}`, {
+      method: "DELETE",
+    });
+    if (res.ok) router.refresh();
+  }
+
+  async function disconnect() {
+    if (!confirm(`Disconnect ${label}? The agent will lose access.`)) return;
+    setWorking(true);
+    const res = await fetch(`/api/oauth/${provider}/disconnect`, {
+      method: "POST",
+    });
+    setWorking(false);
+    if (res.ok) router.refresh();
+  }
+
+  const canConnect = credentialsConfigured;
+
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-950">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+            {label}
+          </h3>
+          <p className="mt-0.5 text-xs text-neutral-500">
+            {connected
+              ? `Connected · scopes: ${scopes.join(", ") || "(none)"}`
+              : (description ?? "Not connected")}
+          </p>
+        </div>
+        {connected ? (
+          <button
+            type="button"
+            onClick={disconnect}
+            disabled={working}
+            className="shrink-0 text-xs text-neutral-500 transition hover:text-red-500 disabled:opacity-50 dark:text-neutral-400 dark:hover:text-red-400"
+          >
+            Disconnect
+          </button>
+        ) : (
+          <a
+            href={canConnect ? `/api/oauth/${provider}/start` : undefined}
+            onClick={(e) => {
+              if (!canConnect) e.preventDefault();
+            }}
+            aria-disabled={!canConnect}
+            className={`shrink-0 rounded-md px-4 py-2 text-sm font-medium transition ${
+              canConnect
+                ? "bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+                : "cursor-not-allowed bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500"
+            }`}
+            title={
+              canConnect
+                ? `Connect ${label}`
+                : `Configure your ${label} OAuth app credentials first`
+            }
+          >
+            Connect
+          </a>
+        )}
+      </div>
+
+      <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-800/60">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <div className="text-neutral-500">
+            <span className="font-medium">OAuth app:</span>{" "}
+            {credentialsConfigured ? (
+              <span>
+                {credentialsSource === "user"
+                  ? `your saved app${credentialsLast4 ? ` · ends in ${credentialsLast4}` : ""}`
+                  : "using server fallback (env vars)"}
+              </span>
+            ) : (
+              <span className="text-amber-600 dark:text-amber-400">
+                not configured — paste your OAuth app credentials below
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {credentialsSource === "user" && (
+              <button
+                type="button"
+                onClick={deleteCredentials}
+                className="text-neutral-500 transition hover:text-red-500 dark:hover:text-red-400"
+              >
+                Remove
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowCredsForm((s) => !s)}
+              className="text-neutral-500 transition hover:text-neutral-900 dark:hover:text-neutral-100"
+            >
+              {showCredsForm
+                ? "Hide"
+                : credentialsConfigured
+                  ? "Replace"
+                  : "Set up"}
+            </button>
+          </div>
+        </div>
+
+        {hint && !connected && (
+          <p className="mt-1 text-[11px] text-neutral-500 italic">{hint}</p>
+        )}
+
+        {showCredsForm && (
+          <form onSubmit={saveCredentials} className="mt-3 space-y-2">
+            <input
+              type="text"
+              autoComplete="off"
+              placeholder={labels.idLabel}
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              required
+              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+            />
+            <input
+              type="password"
+              autoComplete="off"
+              placeholder={labels.secretLabel}
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              required
+              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+            />
+            <button
+              type="submit"
+              disabled={
+                credStatus === "saving" ||
+                clientId.length === 0 ||
+                clientSecret.length === 0
+              }
+              className="w-full rounded-md bg-neutral-900 px-4 py-2 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+            >
+              {credStatus === "saving"
+                ? "Saving…"
+                : credStatus === "saved"
+                  ? "Saved"
+                  : credentialsConfigured
+                    ? "Replace credentials"
+                    : "Save credentials"}
+            </button>
+            {credError && (
+              <p className="text-xs text-red-600 dark:text-red-400">
+                {credError}
+              </p>
+            )}
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}

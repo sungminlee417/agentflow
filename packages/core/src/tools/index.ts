@@ -1,31 +1,50 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "../crypto";
 import { buildGitHubTools } from "./github";
+import { buildYouTubeTools } from "./youtube";
+import { buildTikTokTools } from "./tiktok";
+import { buildInstagramTools } from "./instagram";
+import { buildApifyTikTokTools, loadApifyKey } from "./apify-tiktok";
+import { buildUploadsTools } from "./uploads";
 
-// Compose the agent's tool set based on which integrations the user
-// has connected. A tool only appears to the model if its credentials
-// are present — that way the model never tries to call something it
-// can't actually use.
+// Compose the agent's tool set from the user's connected integrations
+// and any optional service keys (Apify, etc.) plus their analytics
+// uploads. Anything not configured simply isn't exposed.
 
 export async function buildToolsForUser(
   supabase: SupabaseClient,
   userId: string,
 ) {
+  const tools: Record<string, unknown> = {};
+  const connected: string[] = [];
+
+  // OAuth-backed providers (per-user tokens from integrations table).
   const { data: integrations } = await supabase
     .from("integrations")
     .select("provider, encrypted_access_token")
     .eq("user_id", userId);
 
-  const tools: Record<string, unknown> = {};
-  const connected: string[] = [];
-
   for (const i of integrations ?? []) {
     if (!i.encrypted_access_token) continue;
     try {
       const token = decrypt(i.encrypted_access_token);
-      if (i.provider === "github") {
-        Object.assign(tools, buildGitHubTools(token));
-        connected.push("github");
+      switch (i.provider) {
+        case "github":
+          Object.assign(tools, buildGitHubTools(token));
+          connected.push("github");
+          break;
+        case "youtube":
+          Object.assign(tools, buildYouTubeTools(token));
+          connected.push("youtube");
+          break;
+        case "tiktok":
+          Object.assign(tools, buildTikTokTools(token));
+          connected.push("tiktok");
+          break;
+        case "instagram":
+          Object.assign(tools, buildInstagramTools(token));
+          connected.push("instagram");
+          break;
       }
     } catch (err) {
       console.error(
@@ -34,6 +53,16 @@ export async function buildToolsForUser(
       );
     }
   }
+
+  // Apify-backed niche/competitor tools — opt-in via user's Apify key.
+  const apifyToken = await loadApifyKey(supabase, userId, decrypt);
+  if (apifyToken) {
+    Object.assign(tools, buildApifyTikTokTools(apifyToken));
+    connected.push("apify");
+  }
+
+  // Uploaded analytics exports — always available; reads from DB.
+  Object.assign(tools, buildUploadsTools(supabase, userId));
 
   return { tools, connected };
 }

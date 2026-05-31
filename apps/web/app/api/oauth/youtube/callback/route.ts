@@ -6,7 +6,7 @@ import {
   managerForProvider,
 } from "@agentflow/core";
 
-const STATE_COOKIE = "gh_oauth_state";
+const STATE_COOKIE = "yt_oauth_state";
 
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -16,8 +16,8 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.redirect(new URL("/login", request.url));
 
   const managerLanding =
-    managerForProvider("github")?.slug
-      ? `/managers/${managerForProvider("github")!.slug}`
+    managerForProvider("youtube")?.slug
+      ? `/managers/${managerForProvider("youtube")!.slug}`
       : "/settings";
 
   const url = new URL(request.url);
@@ -31,32 +31,34 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const creds = await getOAuthCredentials(supabase, user.id, "github");
+  const creds = await getOAuthCredentials(supabase, user.id, "youtube");
   if (!creds) {
     return NextResponse.redirect(
       new URL(`${managerLanding}?error=oauth_app_not_configured`, request.url),
     );
   }
 
-  const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+  const redirectUri = new URL(
+    "/api/oauth/youtube/callback",
+    request.url,
+  ).toString();
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
       client_id: creds.client_id,
       client_secret: creds.client_secret,
-      code,
-      redirect_uri: new URL(
-        "/api/oauth/github/callback",
-        request.url,
-      ).toString(),
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code",
     }),
   });
 
   const tokenData = (await tokenRes.json().catch(() => null)) as {
     access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
     scope?: string;
     error?: string;
     error_description?: string;
@@ -66,26 +68,28 @@ export async function GET(request: NextRequest) {
     const errMsg = tokenData?.error_description ?? tokenData?.error ?? "unknown";
     return NextResponse.redirect(
       new URL(
-        `${managerLanding}?error=${encodeURIComponent(`github_exchange_failed:${errMsg}`)}`,
+        `${managerLanding}?error=${encodeURIComponent(`youtube_exchange_failed:${errMsg}`)}`,
         request.url,
       ),
     );
   }
 
-  const scopes = (tokenData.scope ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const scopes = (tokenData.scope ?? "").split(" ").filter(Boolean);
+  const expiresAt = tokenData.expires_in
+    ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+    : null;
 
   const { error } = await supabase.from("integrations").upsert(
     {
       user_id: user.id,
-      domain: "github",
-      provider: "github",
+      domain: "youtube",
+      provider: "youtube",
       encrypted_access_token: encrypt(tokenData.access_token),
-      encrypted_refresh_token: null,
+      encrypted_refresh_token: tokenData.refresh_token
+        ? encrypt(tokenData.refresh_token)
+        : null,
       scopes,
-      expires_at: null,
+      expires_at: expiresAt,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id,domain,provider" },
@@ -101,7 +105,7 @@ export async function GET(request: NextRequest) {
   }
 
   const response = NextResponse.redirect(
-    new URL(`${managerLanding}?connected=github`, request.url),
+    new URL(`${managerLanding}?connected=youtube`, request.url),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;

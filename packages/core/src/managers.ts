@@ -40,7 +40,7 @@ export const MANAGERS: Manager[] = [
       "Analytics, content ideas, and comment workflows across YouTube, TikTok, and Instagram.",
     automationTypes: [],
     integrationProviders: ["youtube", "tiktok", "instagram"],
-    status: "coming_soon",
+    status: "available",
   },
 ];
 

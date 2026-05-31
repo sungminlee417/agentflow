@@ -3,23 +3,25 @@ import { randomBytes } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOAuthCredentials, managerForProvider } from "@agentflow/core";
 
-const STATE_COOKIE = "gh_oauth_state";
-const SCOPES = ["repo", "project"];
+const STATE_COOKIE = "yt_oauth_state";
+
+const SCOPES = [
+  "https://www.googleapis.com/auth/youtube.readonly",
+  "https://www.googleapis.com/auth/yt-analytics.readonly",
+];
 
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.redirect(new URL("/login", request.url));
-  }
+  if (!user) return NextResponse.redirect(new URL("/login", request.url));
 
-  const creds = await getOAuthCredentials(supabase, user.id, "github");
+  const creds = await getOAuthCredentials(supabase, user.id, "youtube");
   if (!creds) {
     const landing =
-      managerForProvider("github")?.slug
-        ? `/managers/${managerForProvider("github")!.slug}`
+      managerForProvider("youtube")?.slug
+        ? `/managers/${managerForProvider("youtube")!.slug}`
         : "/settings";
     return NextResponse.redirect(
       new URL(`${landing}?error=oauth_app_not_configured`, request.url),
@@ -28,14 +30,17 @@ export async function GET(request: NextRequest) {
 
   const state = randomBytes(24).toString("hex");
   const redirectUri = new URL(
-    "/api/oauth/github/callback",
+    "/api/oauth/youtube/callback",
     request.url,
   ).toString();
 
-  const authorizeUrl = new URL("https://github.com/login/oauth/authorize");
+  const authorizeUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authorizeUrl.searchParams.set("client_id", creds.client_id);
   authorizeUrl.searchParams.set("redirect_uri", redirectUri);
+  authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("scope", SCOPES.join(" "));
+  authorizeUrl.searchParams.set("access_type", "offline");
+  authorizeUrl.searchParams.set("prompt", "consent");
   authorizeUrl.searchParams.set("state", state);
 
   const response = NextResponse.redirect(authorizeUrl);
