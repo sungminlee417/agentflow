@@ -1,19 +1,32 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
-import { decrypt, runIssueAgent } from "@agentflow/core";
+import {
+  decrypt,
+  isSocialBrief,
+  runIssueAgent,
+  runSocialBriefAgent,
+  type AutomationSchedule,
+  type SocialBriefKind,
+} from "@agentflow/core";
 
 // Worker entry point.
 //
-// Polls all enabled automations across all users, processes any new
-// issues found on watched repos. Uses the Supabase service role to
-// bypass RLS — we're a trusted backend with the master encryption key
-// and the user's encrypted credentials.
+// Polls all enabled automations across all users and dispatches to the
+// appropriate runner based on automation type. Uses the Supabase
+// service role to bypass RLS — we're a trusted backend with the master
+// encryption key and the user's encrypted credentials.
 //
-// One issue is processed per (automation, tick). The next tick picks
-// up the next issue. This keeps individual agent runs short and bounded.
+// GitHub automations process at most one new issue per tick. Social
+// brief automations run on a fixed schedule (daily / weekly).
 
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 30_000);
 const MAX_CONCURRENT_PER_TICK = 5;
+
+const SCHEDULE_INTERVAL_MS: Record<AutomationSchedule, number | null> = {
+  manual: null, // never auto-run
+  daily: 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+};
 
 const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -36,7 +49,9 @@ type Automation = {
   id: string;
   user_id: string;
   type: string;
-  config: { repo?: string } & Record<string, unknown>;
+  config: { repo?: string; focus?: string } & Record<string, unknown>;
+  schedule: AutomationSchedule;
+  last_run_at: string | null;
 };
 
 async function loadGitHubToken(userId: string): Promise<string | null> {
@@ -79,8 +94,7 @@ async function listOpenIssues(
   }>;
 }
 
-async function processAutomation(a: Automation): Promise<void> {
-  if (a.type !== "github_issue_to_pr") return;
+async function processIssueAutomation(a: Automation): Promise<void> {
   const repo = a.config.repo;
   if (!repo) {
     console.warn(`[worker] automation ${a.id} missing config.repo`);
@@ -105,13 +119,15 @@ async function processAutomation(a: Automation): Promise<void> {
   const realIssues = issues.filter((i) => !i.pull_request);
   if (realIssues.length === 0) return;
 
-  // Skip issues with any existing run (done, failed, or running). To
-  // retry, the user deletes the row from the dashboard.
   const { data: existingRuns } = await supabase
     .from("automation_runs")
     .select("issue_number")
     .eq("automation_id", a.id);
-  const handled = new Set((existingRuns ?? []).map((r) => r.issue_number));
+  const handled = new Set(
+    (existingRuns ?? [])
+      .map((r) => r.issue_number)
+      .filter((n): n is number => n !== null),
+  );
   const next = realIssues.find((i) => !handled.has(i.number));
   if (!next) return;
 
@@ -176,10 +192,90 @@ async function processAutomation(a: Automation): Promise<void> {
   );
 }
 
+function isDueForSchedule(
+  schedule: AutomationSchedule,
+  lastRunAt: string | null,
+): boolean {
+  const interval = SCHEDULE_INTERVAL_MS[schedule];
+  if (interval === null) return false; // manual
+  if (!lastRunAt) return true;
+  return Date.now() - new Date(lastRunAt).getTime() >= interval;
+}
+
+async function processSocialBriefAutomation(a: Automation): Promise<void> {
+  if (!isDueForSchedule(a.schedule, a.last_run_at)) return;
+
+  console.log(
+    `[worker] automation ${a.id} (${a.type}) → running social brief`,
+  );
+
+  const { data: run, error: runErr } = await supabase
+    .from("automation_runs")
+    .insert({
+      automation_id: a.id,
+      user_id: a.user_id,
+      status: "running",
+    })
+    .select("id")
+    .single();
+  if (runErr || !run) {
+    console.error(`[worker] failed to record social run:`, runErr);
+    return;
+  }
+
+  const focus =
+    typeof a.config.focus === "string" ? a.config.focus : undefined;
+
+  const result = await runSocialBriefAgent({
+    supabase,
+    userId: a.user_id,
+    type: a.type as SocialBriefKind,
+    focus,
+    onStep: async ({ count, description }) => {
+      await supabase
+        .from("automation_runs")
+        .update({ step_count: count, last_step: description })
+        .eq("id", run.id);
+    },
+  });
+
+  await supabase
+    .from("automation_runs")
+    .update({
+      status: result.ok ? "done" : "failed",
+      tokens: result.tokens ?? null,
+      error: result.error ?? null,
+      report_markdown: result.report_markdown ?? null,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("id", run.id);
+
+  await supabase
+    .from("automations")
+    .update({ last_run_at: new Date().toISOString() })
+    .eq("id", a.id);
+
+  console.log(
+    `[worker] automation ${a.id} done: ${
+      result.ok ? `brief produced (${result.report_markdown?.length ?? 0} chars)` : `failed: ${result.error}`
+    }`,
+  );
+}
+
+async function processAutomation(a: Automation): Promise<void> {
+  if (a.type === "github_issue_to_pr") {
+    return processIssueAutomation(a);
+  }
+  if (isSocialBrief(a.type)) {
+    return processSocialBriefAutomation(a);
+  }
+  console.warn(`[worker] unknown automation type: ${a.type}`);
+}
+
 async function tick(): Promise<void> {
   const { data: automations, error } = await supabase
     .from("automations")
-    .select("id, user_id, type, config")
+    .select("id, user_id, type, config, schedule, last_run_at")
     .eq("enabled", true);
   if (error) {
     console.error(`[worker] load automations failed:`, error);

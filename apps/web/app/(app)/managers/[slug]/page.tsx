@@ -104,14 +104,16 @@ export default async function ManagerPage({
     manager.automationTypes.length > 0
       ? supabase
           .from("automations")
-          .select("id, type, config, enabled, last_run_at, created_at")
+          .select(
+            "id, type, config, enabled, schedule, last_run_at, created_at",
+          )
           .in("type", manager.automationTypes)
           .order("created_at", { ascending: false })
       : Promise.resolve({ data: [] }),
     supabase
       .from("automation_runs")
       .select(
-        "id, automation_id, issue_number, status, pr_url, pr_number, error, started_at, finished_at",
+        "id, automation_id, issue_number, status, pr_url, pr_number, error, report_markdown, started_at, finished_at",
       )
       .order("started_at", { ascending: false })
       .limit(100),
@@ -172,7 +174,13 @@ export default async function ManagerPage({
   }
   const apifyKey = (serviceKeys ?? []).find((k) => k.service === "apify");
 
-  const github = integrationByProvider.get("github");
+  // Track which providers count as "connected" for the
+  // AutomationsSection's requires-check.
+  const connectedProviders: string[] = [];
+  for (const i of integrations ?? []) {
+    connectedProviders.push(i.provider as string);
+  }
+  if (apifyKey) connectedProviders.push("apify");
 
   const { connected: justConnected, error: oauthError } = await searchParams;
 
@@ -298,7 +306,8 @@ export default async function ManagerPage({
         <AutomationsSection
           automations={(automations ?? []) as AutomationRow[]}
           runs={scopedRuns}
-          githubConnected={!!github}
+          availableTypes={manager.automationTypes as never}
+          connectedProviders={connectedProviders}
         />
       )}
     </div>

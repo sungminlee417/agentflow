@@ -38,7 +38,12 @@ export const MANAGERS: Manager[] = [
     label: "Social Media",
     description:
       "Analytics, content ideas, and comment workflows across YouTube, TikTok, and Instagram.",
-    automationTypes: [],
+    automationTypes: [
+      "social_brief_youtube",
+      "social_brief_tiktok",
+      "social_brief_instagram",
+      "social_brief_cross_platform",
+    ],
     integrationProviders: ["youtube", "tiktok", "instagram"],
     status: "available",
   },

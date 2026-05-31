@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { managerForAutomationType } from "@agentflow/core";
+import { managerForAutomationType, isSocialBrief } from "@agentflow/core";
+import { Markdown } from "@/components/markdown";
 
 export type RunRow = {
   id: string;
   automation_id: string;
-  issue_number: number;
+  issue_number: number | null;
   status: "running" | "done" | "failed";
   pr_url: string | null;
   pr_number: number | null;
@@ -17,6 +18,7 @@ export type RunRow = {
   tokens: number | null;
   step_count: number;
   last_step: string | null;
+  report_markdown: string | null;
   started_at: string;
   finished_at: string | null;
 };
@@ -207,11 +209,18 @@ export function ActivityFeed({
           <ul className="space-y-2">
             {runs.map((r) => {
               const automation = automationsById.get(r.automation_id);
-              const repo = automation?.config?.repo ?? "(deleted automation)";
               const duration = formatDuration(r.started_at, r.finished_at);
               const manager = automation
                 ? managerForAutomationType(automation.type)
                 : undefined;
+              const social = automation
+                ? isSocialBrief(automation.type)
+                : false;
+              const rawSubtitle = social
+                ? automation?.config?.focus
+                : automation?.config?.repo ?? "(deleted automation)";
+              const subtitle =
+                typeof rawSubtitle === "string" ? rawSubtitle : "";
               return (
                 <li
                   key={r.id}
@@ -227,12 +236,23 @@ export function ActivityFeed({
                         {manager.label}
                       </Link>
                     )}
-                    <code className="font-mono text-sm text-neutral-900 dark:text-neutral-100">
-                      {repo}
-                    </code>
-                    <span className="text-sm text-neutral-500">
-                      issue #{r.issue_number}
-                    </span>
+                    {subtitle && (
+                      <code className="font-mono text-sm text-neutral-900 dark:text-neutral-100">
+                        {subtitle}
+                      </code>
+                    )}
+                    {!social && r.issue_number !== null && (
+                      <span className="text-sm text-neutral-500">
+                        issue #{r.issue_number}
+                      </span>
+                    )}
+                    {social && (
+                      <span className="text-sm text-neutral-500">
+                        {automation?.type
+                          .replace("social_brief_", "")
+                          .replace("_", " ") ?? "brief"}
+                      </span>
+                    )}
                     {r.pr_url && (
                       <a
                         href={r.pr_url}
@@ -250,7 +270,7 @@ export function ActivityFeed({
                       type="button"
                       onClick={() => deleteRun(r.id, r.status)}
                       className="text-xs text-neutral-400 transition hover:text-red-500 dark:hover:text-red-400"
-                      title="Delete this run (next tick will retry the issue)"
+                      title="Delete this run"
                     >
                       Delete
                     </button>
@@ -277,12 +297,26 @@ export function ActivityFeed({
                     </details>
                   )}
 
-                  {r.status === "done" && r.summary && !r.pr_url && (
-                    <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
-                      {r.summary.slice(0, 200)}
-                      {r.summary.length > 200 ? "…" : ""}
-                    </p>
+                  {r.status === "done" && r.report_markdown && (
+                    <details className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
+                      <summary className="cursor-pointer px-3 py-2 text-xs text-neutral-600 dark:text-neutral-400">
+                        View brief ({Math.round(r.report_markdown.length / 1024)}KB)
+                      </summary>
+                      <div className="max-h-[60vh] overflow-auto border-t border-neutral-200 px-3 py-3 text-sm text-neutral-900 dark:border-neutral-800 dark:text-neutral-100">
+                        <Markdown>{r.report_markdown}</Markdown>
+                      </div>
+                    </details>
                   )}
+
+                  {r.status === "done" &&
+                    r.summary &&
+                    !r.pr_url &&
+                    !r.report_markdown && (
+                      <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                        {r.summary.slice(0, 200)}
+                        {r.summary.length > 200 ? "…" : ""}
+                      </p>
+                    )}
                 </li>
               );
             })}
