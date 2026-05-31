@@ -148,8 +148,9 @@ export function ActivityFeed({
   }, [runs]);
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <div className="flex items-baseline justify-between">
+    <div className="mx-auto max-w-5xl px-4 py-10 md:px-6">
+      {/* Left-pad title on mobile to clear the hamburger button */}
+      <div className="flex flex-wrap items-baseline justify-between gap-y-1 pl-10 md:pl-0">
         <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
           Activity
         </h1>

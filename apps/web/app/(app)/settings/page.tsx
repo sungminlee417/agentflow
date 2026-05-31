@@ -48,8 +48,9 @@ export default async function SettingsPage({
   const { connected: justConnected, error: oauthError } = await searchParams;
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+    <div className="mx-auto max-w-2xl px-4 py-10 md:px-6">
+      {/* Left-pad title on mobile to clear the hamburger button */}
+      <h1 className="pl-10 text-2xl font-semibold tracking-tight text-neutral-900 md:pl-0 dark:text-neutral-100">
         Settings
       </h1>
 

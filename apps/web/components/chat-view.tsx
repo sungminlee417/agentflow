@@ -440,12 +440,13 @@ export function ChatView({
 
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-neutral-950">
-      <header className="border-b border-neutral-200 px-6 py-3 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+      {/* Header – left-pad on mobile to clear the hamburger button */}
+      <header className="border-b border-neutral-200 px-4 py-3 pl-14 text-sm text-neutral-500 md:px-6 md:pl-6 dark:border-neutral-800 dark:text-neutral-400">
         {title ?? (conversationId ? "Conversation" : "New chat")}
       </header>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-6 py-8">
+        <div className="mx-auto max-w-3xl px-4 py-8 md:px-6">
           {isEmpty && (
             <div className="mt-24 text-center text-neutral-500">
               <p className="text-lg">What do you want to work on?</p>
@@ -519,7 +520,7 @@ export function ChatView({
 
       <form
         onSubmit={send}
-        className="border-t border-neutral-200 bg-white px-6 py-4 dark:border-neutral-800 dark:bg-neutral-950"
+        className="border-t border-neutral-200 bg-white px-4 py-4 md:px-6 dark:border-neutral-800 dark:bg-neutral-950"
       >
         <div className="mx-auto flex max-w-3xl gap-2">
           <textarea
