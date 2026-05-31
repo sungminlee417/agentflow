@@ -14,9 +14,11 @@ type ConversationSummary = {
 export function Sidebar({
   conversations,
   hasAnyKey,
+  onClose,
 }: {
   conversations: ConversationSummary[];
   hasAnyKey: boolean;
+  onClose?: () => void;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -29,16 +31,18 @@ export function Sidebar({
   }
 
   return (
-    <aside className="flex h-screen flex-col border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950">
+    <aside className="flex h-full flex-col border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950">
       <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-800">
         <Link
           href="/chat"
+          onClick={onClose}
           className="block rounded-md border border-neutral-300 bg-white px-3 py-2 text-center text-sm font-medium text-neutral-900 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
         >
           + New chat
         </Link>
         <Link
           href="/activity"
+          onClick={onClose}
           className={`block rounded-md px-3 py-2 text-center text-sm transition ${
             pathname === "/activity"
               ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
@@ -63,6 +67,7 @@ export function Sidebar({
                 <li key={c.id}>
                   <Link
                     href={href}
+                    onClick={onClose}
                     className={`block truncate rounded-md px-3 py-2 text-sm transition ${
                       active
                         ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
@@ -86,6 +91,7 @@ export function Sidebar({
         )}
         <Link
           href="/settings"
+          onClick={onClose}
           className={`block rounded-md px-3 py-2 transition ${
             pathname === "/settings"
               ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-white"
