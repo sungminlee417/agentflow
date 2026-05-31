@@ -1,5 +1,5 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { Sidebar } from "@/components/sidebar";
+import { AppShell } from "@/components/app-shell";
 
 export default async function AppLayout({
   children,
@@ -18,12 +18,11 @@ export default async function AppLayout({
   ]);
 
   return (
-    <div className="grid min-h-screen grid-cols-[260px_1fr]">
-      <Sidebar
-        conversations={conversations ?? []}
-        hasAnyKey={(keys ?? []).length > 0}
-      />
-      <main className="overflow-y-auto">{children}</main>
-    </div>
+    <AppShell
+      conversations={conversations ?? []}
+      hasAnyKey={(keys ?? []).length > 0}
+    >
+      {children}
+    </AppShell>
   );
 }
