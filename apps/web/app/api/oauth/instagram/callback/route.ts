@@ -5,6 +5,7 @@ import {
   getOAuthCredentials,
   managerForProvider,
 } from "@agentflow/core";
+import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "ig_oauth_state";
 
@@ -13,7 +14,7 @@ export async function GET(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/login", request.url));
+  if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
   const managerLanding =
     managerForProvider("instagram")?.slug
@@ -27,21 +28,18 @@ export async function GET(request: NextRequest) {
 
   if (!code || !state || state !== cookieState) {
     return NextResponse.redirect(
-      new URL(`${managerLanding}?error=oauth_state_mismatch`, request.url),
+      publicUrl(request, `${managerLanding}?error=oauth_state_mismatch`),
     );
   }
 
   const creds = await getOAuthCredentials(supabase, user.id, "instagram");
   if (!creds) {
     return NextResponse.redirect(
-      new URL(`${managerLanding}?error=oauth_app_not_configured`, request.url),
+      publicUrl(request, `${managerLanding}?error=oauth_app_not_configured`),
     );
   }
 
-  const redirectUri = new URL(
-    "/api/oauth/instagram/callback",
-    request.url,
-  ).toString();
+  const redirectUri = publicUrl(request, "/api/oauth/instagram/callback");
 
   const shortRes = await fetch("https://api.instagram.com/oauth/access_token", {
     method: "POST",
@@ -102,15 +100,15 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL(
+      publicUrl(
+        request,
         `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
-        request.url,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    new URL(`${managerLanding}?connected=instagram`, request.url),
+    publicUrl(request, `${managerLanding}?connected=instagram`),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;

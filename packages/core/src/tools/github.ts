@@ -495,4 +495,3 @@ export function buildGitHubTools(token: string) {
   };
 }
 
-export type GitHubTools = ReturnType<typeof buildGitHubTools>;

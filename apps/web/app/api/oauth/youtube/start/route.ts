@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOAuthCredentials, managerForProvider } from "@agentflow/core";
+import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "yt_oauth_state";
 
@@ -15,7 +16,7 @@ export async function GET(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/login", request.url));
+  if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
   const creds = await getOAuthCredentials(supabase, user.id, "youtube");
   if (!creds) {
@@ -24,15 +25,12 @@ export async function GET(request: NextRequest) {
         ? `/managers/${managerForProvider("youtube")!.slug}`
         : "/settings";
     return NextResponse.redirect(
-      new URL(`${landing}?error=oauth_app_not_configured`, request.url),
+      publicUrl(request, `${landing}?error=oauth_app_not_configured`),
     );
   }
 
   const state = randomBytes(24).toString("hex");
-  const redirectUri = new URL(
-    "/api/oauth/youtube/callback",
-    request.url,
-  ).toString();
+  const redirectUri = publicUrl(request, "/api/oauth/youtube/callback");
 
   const authorizeUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authorizeUrl.searchParams.set("client_id", creds.client_id);

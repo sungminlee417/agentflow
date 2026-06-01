@@ -21,7 +21,7 @@ export function AppShell({
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="relative flex min-h-screen">
+    <div className="relative flex h-screen overflow-hidden">
       {/* ── Mobile overlay backdrop ─────────────────────────────────── */}
       {sidebarOpen && (
         <div
@@ -33,13 +33,14 @@ export function AppShell({
 
       {/* ── Sidebar ─────────────────────────────────────────────────── */}
       {/*
-       *  Desktop (md+): static column, always visible.
+       *  Desktop (md+): static column, always visible — full viewport
+       *  height, doesn't scroll with the main panel.
        *  Mobile       : fixed off-canvas panel, slides in/out via translate.
        */}
       <div
         className={[
           // Shared
-          "z-30 w-[260px] shrink-0 transition-transform duration-200",
+          "z-30 h-screen w-[260px] shrink-0 transition-transform duration-200",
           // Mobile: fixed, full height, slides in from the left
           "fixed inset-y-0 left-0 md:relative md:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
@@ -53,7 +54,7 @@ export function AppShell({
       </div>
 
       {/* ── Main content area ───────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="h-screen flex-1 overflow-y-auto">
         {/* Hamburger / close button – only visible on mobile */}
         <button
           type="button"

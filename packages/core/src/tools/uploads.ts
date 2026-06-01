@@ -54,4 +54,3 @@ export function buildUploadsTools(supabase: SupabaseClient, userId: string) {
   };
 }
 
-export type UploadsTools = ReturnType<typeof buildUploadsTools>;

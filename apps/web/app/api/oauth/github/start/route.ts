@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOAuthCredentials, managerForProvider } from "@agentflow/core";
+import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "gh_oauth_state";
 const SCOPES = ["repo", "project"];
@@ -12,7 +13,7 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(publicUrl(request, "/login"));
   }
 
   const creds = await getOAuthCredentials(supabase, user.id, "github");
@@ -22,15 +23,12 @@ export async function GET(request: NextRequest) {
         ? `/managers/${managerForProvider("github")!.slug}`
         : "/settings";
     return NextResponse.redirect(
-      new URL(`${landing}?error=oauth_app_not_configured`, request.url),
+      publicUrl(request, `${landing}?error=oauth_app_not_configured`),
     );
   }
 
   const state = randomBytes(24).toString("hex");
-  const redirectUri = new URL(
-    "/api/oauth/github/callback",
-    request.url,
-  ).toString();
+  const redirectUri = publicUrl(request, "/api/oauth/github/callback");
 
   const authorizeUrl = new URL("https://github.com/login/oauth/authorize");
   authorizeUrl.searchParams.set("client_id", creds.client_id);

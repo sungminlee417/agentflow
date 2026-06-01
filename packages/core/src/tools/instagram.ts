@@ -157,4 +157,3 @@ export function buildInstagramTools(token: string) {
   };
 }
 
-export type InstagramTools = ReturnType<typeof buildInstagramTools>;

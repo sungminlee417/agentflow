@@ -106,4 +106,3 @@ export function buildTikTokTools(token: string) {
   };
 }
 
-export type TikTokTools = ReturnType<typeof buildTikTokTools>;

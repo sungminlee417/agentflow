@@ -3,10 +3,13 @@ import { createClient } from "@supabase/supabase-js";
 import {
   decrypt,
   isSocialBrief,
+  isSocialScripts,
   runIssueAgent,
   runSocialBriefAgent,
+  runSocialScriptsAgent,
   type AutomationSchedule,
   type SocialBriefKind,
+  type SocialScriptsKind,
 } from "@agentflow/core";
 
 // Worker entry point.
@@ -262,12 +265,77 @@ async function processSocialBriefAutomation(a: Automation): Promise<void> {
   );
 }
 
+async function processSocialScriptsAutomation(a: Automation): Promise<void> {
+  if (!isDueForSchedule(a.schedule, a.last_run_at)) return;
+
+  console.log(
+    `[worker] automation ${a.id} (${a.type}) → producing video scripts`,
+  );
+
+  const { data: run, error: runErr } = await supabase
+    .from("automation_runs")
+    .insert({
+      automation_id: a.id,
+      user_id: a.user_id,
+      status: "running",
+    })
+    .select("id")
+    .single();
+  if (runErr || !run) {
+    console.error(`[worker] failed to record scripts run:`, runErr);
+    return;
+  }
+
+  const focus =
+    typeof a.config.focus === "string" ? a.config.focus : undefined;
+
+  const result = await runSocialScriptsAgent({
+    supabase,
+    userId: a.user_id,
+    type: a.type as SocialScriptsKind,
+    focus,
+    onStep: async ({ count, description }) => {
+      await supabase
+        .from("automation_runs")
+        .update({ step_count: count, last_step: description })
+        .eq("id", run.id);
+    },
+  });
+
+  await supabase
+    .from("automation_runs")
+    .update({
+      status: result.ok ? "done" : "failed",
+      tokens: result.tokens ?? null,
+      error: result.error ?? null,
+      report_markdown: result.report_markdown ?? null,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("id", run.id);
+
+  await supabase
+    .from("automations")
+    .update({ last_run_at: new Date().toISOString() })
+    .eq("id", a.id);
+
+  console.log(
+    `[worker] automation ${a.id} done: ${
+      result.ok
+        ? `scripts produced (${result.report_markdown?.length ?? 0} chars)`
+        : `failed: ${result.error}`
+    }`,
+  );
+}
+
 async function processAutomation(a: Automation): Promise<void> {
   if (a.type === "github_issue_to_pr") {
     return processIssueAutomation(a);
   }
   if (isSocialBrief(a.type)) {
     return processSocialBriefAutomation(a);
+  }
+  if (isSocialScripts(a.type)) {
+    return processSocialScriptsAutomation(a);
   }
   console.warn(`[worker] unknown automation type: ${a.type}`);
 }

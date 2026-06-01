@@ -5,6 +5,7 @@ import {
   getOAuthCredentials,
   managerForProvider,
 } from "@agentflow/core";
+import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "gh_oauth_state";
 
@@ -13,7 +14,7 @@ export async function GET(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/login", request.url));
+  if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
   const managerLanding =
     managerForProvider("github")?.slug
@@ -27,14 +28,14 @@ export async function GET(request: NextRequest) {
 
   if (!code || !state || state !== cookieState) {
     return NextResponse.redirect(
-      new URL(`${managerLanding}?error=oauth_state_mismatch`, request.url),
+      publicUrl(request, `${managerLanding}?error=oauth_state_mismatch`),
     );
   }
 
   const creds = await getOAuthCredentials(supabase, user.id, "github");
   if (!creds) {
     return NextResponse.redirect(
-      new URL(`${managerLanding}?error=oauth_app_not_configured`, request.url),
+      publicUrl(request, `${managerLanding}?error=oauth_app_not_configured`),
     );
   }
 
@@ -48,10 +49,7 @@ export async function GET(request: NextRequest) {
       client_id: creds.client_id,
       client_secret: creds.client_secret,
       code,
-      redirect_uri: new URL(
-        "/api/oauth/github/callback",
-        request.url,
-      ).toString(),
+      redirect_uri: publicUrl(request, "/api/oauth/github/callback"),
     }),
   });
 
@@ -93,15 +91,15 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL(
+      publicUrl(
+        request,
         `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
-        request.url,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    new URL(`${managerLanding}?connected=github`, request.url),
+    publicUrl(request, `${managerLanding}?connected=github`),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;

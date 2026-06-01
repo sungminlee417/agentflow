@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOAuthCredentials, managerForProvider } from "@agentflow/core";
+import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "ig_oauth_state";
 
@@ -16,7 +17,7 @@ export async function GET(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/login", request.url));
+  if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
   const creds = await getOAuthCredentials(supabase, user.id, "instagram");
   if (!creds) {
@@ -25,15 +26,12 @@ export async function GET(request: NextRequest) {
         ? `/managers/${managerForProvider("instagram")!.slug}`
         : "/settings";
     return NextResponse.redirect(
-      new URL(`${landing}?error=oauth_app_not_configured`, request.url),
+      publicUrl(request, `${landing}?error=oauth_app_not_configured`),
     );
   }
 
   const state = randomBytes(24).toString("hex");
-  const redirectUri = new URL(
-    "/api/oauth/instagram/callback",
-    request.url,
-  ).toString();
+  const redirectUri = publicUrl(request, "/api/oauth/instagram/callback");
 
   const authorizeUrl = new URL("https://www.instagram.com/oauth/authorize");
   authorizeUrl.searchParams.set("client_id", creds.client_id);

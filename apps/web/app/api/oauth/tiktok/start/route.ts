@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes, createHash } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOAuthCredentials, managerForProvider } from "@agentflow/core";
+import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "tt_oauth_state";
 const VERIFIER_COOKIE = "tt_oauth_verifier";
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/login", request.url));
+  if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
   const creds = await getOAuthCredentials(supabase, user.id, "tiktok");
   if (!creds) {
@@ -29,7 +30,7 @@ export async function GET(request: NextRequest) {
         ? `/managers/${managerForProvider("tiktok")!.slug}`
         : "/settings";
     return NextResponse.redirect(
-      new URL(`${landing}?error=oauth_app_not_configured`, request.url),
+      publicUrl(request, `${landing}?error=oauth_app_not_configured`),
     );
   }
 
@@ -39,10 +40,13 @@ export async function GET(request: NextRequest) {
     createHash("sha256").update(codeVerifier).digest(),
   );
 
-  const redirectUri = new URL(
-    "/api/oauth/tiktok/callback",
-    request.url,
-  ).toString();
+  const redirectUri = publicUrl(request, "/api/oauth/tiktok/callback");
+  // If we're behind an HTTPS tunnel (ngrok / Vercel), cookies must be
+  // `secure: true` for cross-site sameSite=lax behavior to work
+  // reliably during the OAuth redirect. We detect via x-forwarded-proto.
+  const isHttps =
+    request.headers.get("x-forwarded-proto") === "https" ||
+    process.env.NODE_ENV === "production";
 
   const authorizeUrl = new URL("https://www.tiktok.com/v2/auth/authorize/");
   authorizeUrl.searchParams.set("client_key", creds.client_id);
@@ -56,14 +60,14 @@ export async function GET(request: NextRequest) {
   const response = NextResponse.redirect(authorizeUrl);
   response.cookies.set(STATE_COOKIE, state, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttps,
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 10,
   });
   response.cookies.set(VERIFIER_COOKIE, codeVerifier, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttps,
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 10,

@@ -123,6 +123,13 @@ export function Sidebar({
           </div>
         )}
         <Link
+          href="/integrations"
+          onClick={onClose}
+          className={topLinkClass("/integrations")}
+        >
+          Integrations
+        </Link>
+        <Link
           href="/settings"
           onClick={onClose}
           className={topLinkClass("/settings")}

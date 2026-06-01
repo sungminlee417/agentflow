@@ -5,6 +5,7 @@ import {
   getOAuthCredentials,
   managerForProvider,
 } from "@agentflow/core";
+import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "tt_oauth_state";
 const VERIFIER_COOKIE = "tt_oauth_verifier";
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/login", request.url));
+  if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
   const managerLanding =
     managerForProvider("tiktok")?.slug
@@ -29,21 +30,18 @@ export async function GET(request: NextRequest) {
 
   if (!code || !state || state !== cookieState || !codeVerifier) {
     return NextResponse.redirect(
-      new URL(`${managerLanding}?error=oauth_state_mismatch`, request.url),
+      publicUrl(request, `${managerLanding}?error=oauth_state_mismatch`),
     );
   }
 
   const creds = await getOAuthCredentials(supabase, user.id, "tiktok");
   if (!creds) {
     return NextResponse.redirect(
-      new URL(`${managerLanding}?error=oauth_app_not_configured`, request.url),
+      publicUrl(request, `${managerLanding}?error=oauth_app_not_configured`),
     );
   }
 
-  const redirectUri = new URL(
-    "/api/oauth/tiktok/callback",
-    request.url,
-  ).toString();
+  const redirectUri = publicUrl(request, "/api/oauth/tiktok/callback");
 
   const tokenRes = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
     method: "POST",
@@ -70,9 +68,9 @@ export async function GET(request: NextRequest) {
   if (!tokenData?.access_token) {
     const errMsg = tokenData?.error_description ?? tokenData?.error ?? "unknown";
     return NextResponse.redirect(
-      new URL(
+      publicUrl(
+        request,
         `${managerLanding}?error=${encodeURIComponent(`tiktok_exchange_failed:${errMsg}`)}`,
-        request.url,
       ),
     );
   }
@@ -100,15 +98,15 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL(
+      publicUrl(
+        request,
         `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
-        request.url,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    new URL(`${managerLanding}?connected=tiktok`, request.url),
+    publicUrl(request, `${managerLanding}?connected=tiktok`),
   );
   response.cookies.delete(STATE_COOKIE);
   response.cookies.delete(VERIFIER_COOKIE);

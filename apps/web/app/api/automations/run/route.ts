@@ -3,9 +3,12 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   decrypt,
   isSocialBrief,
+  isSocialScripts,
   runIssueAgent,
   runSocialBriefAgent,
+  runSocialScriptsAgent,
   type SocialBriefKind,
+  type SocialScriptsKind,
 } from "@agentflow/core";
 
 // Manual "Run now" trigger for the user's enabled automations.
@@ -53,6 +56,14 @@ export async function POST(_request: NextRequest) {
         await runSocialBrief(supabase, user.id, automation as {
           id: string;
           type: SocialBriefKind;
+          config: Record<string, unknown>;
+        }),
+      );
+    } else if (isSocialScripts(automation.type)) {
+      reports.push(
+        await runSocialScripts(supabase, user.id, automation as {
+          id: string;
+          type: SocialScriptsKind;
           config: Record<string, unknown>;
         }),
       );
@@ -285,6 +296,72 @@ async function runSocialBrief(
     status: result.ok ? "ok" : "failed",
     message: result.ok
       ? `Brief produced (${result.report_markdown?.length ?? 0} chars).`
+      : `Failed: ${result.error ?? "unknown error"}`,
+  };
+}
+
+async function runSocialScripts(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  userId: string,
+  automation: { id: string; type: SocialScriptsKind; config: Record<string, unknown> },
+): Promise<RunReport> {
+  const { data: run, error: runErr } = await supabase
+    .from("automation_runs")
+    .insert({
+      automation_id: automation.id,
+      user_id: userId,
+      status: "running",
+    })
+    .select("id")
+    .single();
+  if (runErr || !run) {
+    return {
+      automation_id: automation.id,
+      status: "failed",
+      message: `Could not record run: ${runErr?.message ?? "unknown"}`,
+    };
+  }
+
+  const focus =
+    typeof automation.config.focus === "string"
+      ? (automation.config.focus as string)
+      : undefined;
+
+  const result = await runSocialScriptsAgent({
+    supabase,
+    userId,
+    type: automation.type,
+    focus,
+    onStep: async ({ count, description }) => {
+      await supabase
+        .from("automation_runs")
+        .update({ step_count: count, last_step: description })
+        .eq("id", run.id);
+    },
+  });
+
+  await supabase
+    .from("automation_runs")
+    .update({
+      status: result.ok ? "done" : "failed",
+      tokens: result.tokens ?? null,
+      error: result.error ?? null,
+      report_markdown: result.report_markdown ?? null,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("id", run.id);
+
+  await supabase
+    .from("automations")
+    .update({ last_run_at: new Date().toISOString() })
+    .eq("id", automation.id);
+
+  return {
+    automation_id: automation.id,
+    status: result.ok ? "ok" : "failed",
+    message: result.ok
+      ? `Scripts produced (${result.report_markdown?.length ?? 0} chars).`
       : `Failed: ${result.error ?? "unknown error"}`,
   };
 }

@@ -341,4 +341,3 @@ export function buildYouTubeTools(token: string) {
   };
 }
 
-export type YouTubeTools = ReturnType<typeof buildYouTubeTools>;
