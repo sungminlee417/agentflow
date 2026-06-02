@@ -106,6 +106,10 @@ export function VideoIdeasList({
   }, [targetCount]);
   const [filter, setFilter] = useState<KindFilter>("all");
   const [refreshing, setRefreshing] = useState(false);
+  const [progress, setProgress] = useState<{
+    count: number;
+    label: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [savingTarget, setSavingTarget] = useState(false);
@@ -151,33 +155,88 @@ export function VideoIdeasList({
     setRefreshing(true);
     setError(null);
     setMessage(null);
+    setProgress({ count: 0, label: "Starting…" });
     try {
       const res = await fetch("/api/video-ideas/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integration_id: selectedAccountId }),
       });
-      const json = (await res.json().catch(() => ({}))) as {
-        generated?: number;
-        message?: string;
-        error?: string;
-      };
-      if (!res.ok) {
-        setError(json.error ?? `Refresh failed (${res.status}).`);
+      if (!res.ok || !res.body) {
+        setError(`Refresh failed (${res.status}).`);
         return;
       }
-      if (json.generated && json.generated > 0) {
-        setMessage(
-          `Generated ${json.generated} new idea${json.generated === 1 ? "" : "s"}.`,
-        );
-      } else {
-        setMessage(json.message ?? "Already at target.");
+
+      // Stream parser for SSE: read chunks, split on \n\n, parse
+      // event/data pairs. Each frame either advances the progress
+      // display, finishes the run, or surfaces an error.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalMessage: string | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let nl: number;
+        while ((nl = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 2);
+          let evtType = "message";
+          let dataStr = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) evtType = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataStr = line.slice(5).trim();
+          }
+          if (!dataStr) continue;
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = JSON.parse(dataStr);
+          } catch {
+            continue;
+          }
+          if (evtType === "prepare") {
+            setProgress({ count: 0, label: String(payload.label ?? "Working…") });
+          } else if (evtType === "step") {
+            setProgress({
+              count: Number(payload.count ?? 0),
+              label: String(payload.label ?? "Working…"),
+            });
+          } else if (evtType === "inserting") {
+            setProgress({
+              count: Number(payload.generated ?? 0),
+              label: "Saving ideas to your library…",
+            });
+          } else if (evtType === "done") {
+            const generated = Number(payload.generated ?? 0);
+            if (generated > 0) {
+              finalMessage = `Generated ${generated} new idea${generated === 1 ? "" : "s"}.`;
+            } else {
+              finalMessage =
+                typeof payload.message === "string"
+                  ? payload.message
+                  : "Already at target.";
+            }
+          } else if (evtType === "error") {
+            setError(
+              typeof payload.error === "string"
+                ? payload.error
+                : "Refresh failed.",
+            );
+            return;
+          }
+        }
       }
+
+      if (finalMessage) setMessage(finalMessage);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setRefreshing(false);
+      setProgress(null);
     }
   }
 
@@ -286,12 +345,39 @@ export function VideoIdeasList({
             type="button"
             onClick={refresh}
             disabled={refreshing || !selectedAccountId}
-            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-900 transition hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-900 transition hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
           >
+            {refreshing && (
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-700 dark:border-neutral-700 dark:border-t-neutral-200" />
+            )}
             {refreshing ? "Generating…" : "↻ Refresh"}
           </button>
         </div>
       </header>
+
+      {refreshing && progress && (
+        <div className="mt-6 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm dark:border-blue-900 dark:bg-blue-950/30">
+          <div className="flex items-center gap-3">
+            <span className="inline-block h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-blue-500" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-2">
+                {progress.count > 0 && (
+                  <span className="font-mono text-[11px] text-blue-700 dark:text-blue-300">
+                    step {progress.count}
+                  </span>
+                )}
+                <span className="text-blue-900 dark:text-blue-100">
+                  {progress.label}
+                </span>
+              </div>
+              <p className="mt-0.5 text-[11px] text-blue-700/70 dark:text-blue-300/70">
+                Generation usually takes 30-60 seconds. You can leave this
+                tab — the run continues server-side.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 flex flex-wrap items-center gap-2">
         <span className="text-xs text-neutral-500">Account:</span>
