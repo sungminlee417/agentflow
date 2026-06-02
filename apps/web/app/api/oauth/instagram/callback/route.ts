@@ -6,6 +6,7 @@ import {
   managerForProvider,
 } from "@agentflow/core";
 import { publicUrl } from "@/lib/public-url";
+import { upsertIntegrationByAccount } from "@/lib/integration-upsert";
 
 const STATE_COOKIE = "ig_oauth_state";
 
@@ -84,31 +85,56 @@ export async function GET(request: NextRequest) {
     ? new Date(Date.now() + longData.expires_in * 1000).toISOString()
     : null;
 
-  const { error } = await supabase.from("integrations").upsert(
-    {
-      user_id: user.id,
-      domain: "instagram",
-      provider: "instagram",
-      encrypted_access_token: encrypt(finalToken),
-      encrypted_refresh_token: null,
-      scopes: shortData.permissions ?? [],
-      expires_at: expiresAt,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id,domain,provider" },
-  );
+  // Fetch the IG account identity. /me with the long-lived token returns
+  // id + username (provided the app has user_profile scope).
+  let accountId: string | null = shortData.user_id != null ? String(shortData.user_id) : null;
+  let handle: string | null = null;
+  try {
+    const meRes = await fetch(
+      `https://graph.instagram.com/me?fields=id,username&access_token=${encodeURIComponent(finalToken)}`,
+    );
+    if (meRes.ok) {
+      const me = (await meRes.json()) as { id?: string; username?: string };
+      accountId = me.id ?? accountId;
+      handle = me.username ?? null;
+    }
+  } catch (err) {
+    console.error("instagram identity fetch failed:", err);
+  }
+
+  if (!accountId) {
+    return NextResponse.redirect(
+      publicUrl(
+        request,
+        `${managerLanding}?error=${encodeURIComponent("instagram_identity_unavailable")}`,
+      ),
+    );
+  }
+
+  const { error } = await upsertIntegrationByAccount(supabase, {
+    userId: user.id,
+    domain: "instagram",
+    provider: "instagram",
+    providerAccountId: accountId,
+    handle,
+    displayName: handle,
+    encryptedAccessToken: encrypt(finalToken),
+    encryptedRefreshToken: null,
+    scopes: shortData.permissions ?? [],
+    expiresAt,
+  });
 
   if (error) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
+        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error)}`,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    publicUrl(request, `${managerLanding}?connected=instagram`),
+    publicUrl(request, `/integrations?connected=instagram`),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;

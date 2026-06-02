@@ -6,6 +6,7 @@ import {
   managerForProvider,
 } from "@agentflow/core";
 import { publicUrl } from "@/lib/public-url";
+import { upsertIntegrationByAccount } from "@/lib/integration-upsert";
 
 const STATE_COOKIE = "yt_oauth_state";
 
@@ -72,38 +73,72 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Fetch the YouTube channel identity. mine=true returns the channel
+  // owned by the authenticated user.
+  let accountId: string | null = null;
+  let handle: string | null = null;
+  let displayName: string | null = null;
+  try {
+    const chRes = await fetch(
+      "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+      { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
+    );
+    if (chRes.ok) {
+      const json = (await chRes.json()) as {
+        items?: Array<{
+          id?: string;
+          snippet?: { title?: string; customUrl?: string };
+        }>;
+      };
+      const ch = json.items?.[0];
+      accountId = ch?.id ?? null;
+      handle = ch?.snippet?.customUrl ?? null;
+      displayName = ch?.snippet?.title ?? null;
+    }
+  } catch (err) {
+    console.error("youtube identity fetch failed:", err);
+  }
+
+  if (!accountId) {
+    return NextResponse.redirect(
+      publicUrl(
+        request,
+        `${managerLanding}?error=${encodeURIComponent("youtube_identity_unavailable")}`,
+      ),
+    );
+  }
+
   const scopes = (tokenData.scope ?? "").split(" ").filter(Boolean);
   const expiresAt = tokenData.expires_in
     ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
     : null;
 
-  const { error } = await supabase.from("integrations").upsert(
-    {
-      user_id: user.id,
-      domain: "youtube",
-      provider: "youtube",
-      encrypted_access_token: encrypt(tokenData.access_token),
-      encrypted_refresh_token: tokenData.refresh_token
-        ? encrypt(tokenData.refresh_token)
-        : null,
-      scopes,
-      expires_at: expiresAt,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id,domain,provider" },
-  );
+  const { error } = await upsertIntegrationByAccount(supabase, {
+    userId: user.id,
+    domain: "youtube",
+    provider: "youtube",
+    providerAccountId: accountId,
+    handle,
+    displayName,
+    encryptedAccessToken: encrypt(tokenData.access_token),
+    encryptedRefreshToken: tokenData.refresh_token
+      ? encrypt(tokenData.refresh_token)
+      : null,
+    scopes,
+    expiresAt,
+  });
 
   if (error) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
+        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error)}`,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    publicUrl(request, `${managerLanding}?connected=youtube`),
+    publicUrl(request, `/integrations?connected=youtube`),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;

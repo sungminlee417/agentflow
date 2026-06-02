@@ -3,7 +3,7 @@ import { generateText, stepCountIs } from "ai";
 import { z } from "zod";
 import { decrypt } from "../crypto";
 import { getModel, isProvider } from "../ai-providers";
-import { buildToolsForUser } from "../tools";
+import { buildToolsForIntegrations, loadIntegration } from "../tools";
 
 // Generates a balanced batch of fresh video ideas across four "kinds":
 //   • pattern    — extrapolated from the user's own top performers
@@ -125,21 +125,30 @@ Your VERY LAST message must be this JSON and nothing else. Do not say "Here are 
 export async function runVideoIdeasAgent({
   supabase,
   userId,
+  integrationId,
   count,
-  provider = "tiktok",
   onStep,
 }: {
   supabase: SupabaseClient;
   userId: string;
+  /** Which specific connected account this run is for. */
+  integrationId: string;
   count: number;
-  provider?: "tiktok";
   onStep?: (s: { count: number; description: string }) => Promise<void> | void;
 }): Promise<VideoIdeasResult> {
-  if (provider !== "tiktok") {
-    return { ok: false, error: `Unsupported provider: ${provider}` };
-  }
   if (count <= 0) {
     return { ok: true, ideas: [] };
+  }
+
+  const integration = await loadIntegration(supabase, userId, integrationId);
+  if (!integration) {
+    return { ok: false, error: "Integration not found." };
+  }
+  if (integration.provider !== "tiktok") {
+    return {
+      ok: false,
+      error: `Unsupported provider: ${integration.provider}`,
+    };
   }
 
   const { data: keys } = await supabase
@@ -166,7 +175,13 @@ export async function runVideoIdeasAgent({
     };
   }
 
-  const { tools, connected } = await buildToolsForUser(supabase, userId);
+  // Scope tools to THIS specific integration so the agent doesn't
+  // accidentally read another account's videos.
+  const { tools, connected } = await buildToolsForIntegrations(
+    supabase,
+    userId,
+    [integration],
+  );
   if (!connected.includes("tiktok")) {
     return { ok: false, error: "TikTok integration not connected." };
   }

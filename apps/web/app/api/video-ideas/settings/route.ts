@@ -9,26 +9,40 @@ export async function PUT(req: NextRequest) {
   if (!user) return new NextResponse("Unauthorized", { status: 401 });
 
   const body = (await req.json().catch(() => null)) as {
+    integration_id?: string;
     target_count?: number;
-    provider?: string;
   } | null;
-  if (!body) return new NextResponse("Invalid body", { status: 400 });
+  if (!body?.integration_id) {
+    return new NextResponse("Missing integration_id", { status: 400 });
+  }
+
+  // Verify ownership.
+  const { data: integration } = await supabase
+    .from("integrations")
+    .select("id, provider")
+    .eq("id", body.integration_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!integration) {
+    return new NextResponse("Integration not found", { status: 404 });
+  }
 
   const targetCount = Math.min(
     50,
     Math.max(1, Number(body.target_count ?? 10)),
   );
-  const provider = body.provider === "tiktok" ? "tiktok" : "tiktok";
 
-  const { error } = await supabase
-    .from("video_ideas_settings")
-    .upsert({
+  const { error } = await supabase.from("video_ideas_settings").upsert(
+    {
       user_id: user.id,
+      integration_id: body.integration_id,
+      provider: integration.provider,
       target_count: targetCount,
-      provider,
       updated_at: new Date().toISOString(),
-    });
+    },
+    { onConflict: "user_id,integration_id" },
+  );
 
   if (error) return new NextResponse(error.message, { status: 500 });
-  return NextResponse.json({ target_count: targetCount, provider });
+  return NextResponse.json({ target_count: targetCount });
 }

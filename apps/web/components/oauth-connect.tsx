@@ -3,15 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-// Generic OAuth Connect card with a built-in "OAuth app credentials"
-// form. Each user supplies their own OAuth app's client_id +
-// client_secret per provider (BYOK for OAuth) — fall-back to server
-// env vars happens server-side in getOAuthCredentials().
+// OAuth credentials form + Connect button. Each user supplies their own
+// OAuth app's client_id + client_secret per provider — server env vars
+// are used as a fallback (handled in getOAuthCredentials).
 //
-// Flow:
-//   1. User pastes their client_id + client_secret (or has env fallback)
-//   2. Connect button enables → standard OAuth handshake
-//   3. Disconnect tears down just the user-token side (keeps credentials)
+// Multi-account: this surface is now used to add NEW connections. The
+// "connected" state per account lives in the parent (IntegrationsHub),
+// which renders AccountCard rows separately. Disconnect happens
+// per-account, not via this component.
 
 const PROVIDER_LABELS: Record<string, { idLabel: string; secretLabel: string }> = {
   github: { idLabel: "Client ID", secretLabel: "Client Secret" },
@@ -25,8 +24,7 @@ export function OAuthConnect({
   label,
   description,
   hint,
-  connected,
-  scopes,
+  hasExistingAccounts,
   credentialsConfigured,
   credentialsLast4,
   credentialsSource,
@@ -35,16 +33,14 @@ export function OAuthConnect({
   label: string;
   description?: string;
   hint?: string;
-  connected: boolean;
-  scopes: string[];
+  hasExistingAccounts: boolean;
   credentialsConfigured: boolean;
   credentialsLast4: string | null;
   credentialsSource: "user" | "env" | null;
 }) {
   const router = useRouter();
-  const [working, setWorking] = useState(false);
   const [showCredsForm, setShowCredsForm] = useState(
-    !credentialsConfigured && !connected,
+    !credentialsConfigured && !hasExistingAccounts,
   );
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
@@ -87,23 +83,13 @@ export function OAuthConnect({
   async function deleteCredentials() {
     if (
       !confirm(
-        `Remove your saved ${label} OAuth app credentials? If you're already connected, that connection still works until you disconnect.`,
+        `Remove your saved ${label} OAuth app credentials? Existing connections still work until you disconnect them.`,
       )
     )
       return;
     const res = await fetch(`/api/oauth-credentials?provider=${provider}`, {
       method: "DELETE",
     });
-    if (res.ok) router.refresh();
-  }
-
-  async function disconnect() {
-    if (!confirm(`Disconnect ${label}? The agent will lose access.`)) return;
-    setWorking(true);
-    const res = await fetch(`/api/oauth/${provider}/disconnect`, {
-      method: "POST",
-    });
-    setWorking(false);
     if (res.ok) router.refresh();
   }
 
@@ -116,42 +102,29 @@ export function OAuthConnect({
           <h3 className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
             {label}
           </h3>
-          <p className="mt-0.5 text-xs text-neutral-500">
-            {connected
-              ? `Connected · scopes: ${scopes.join(", ") || "(none)"}`
-              : (description ?? "Not connected")}
-          </p>
+          {description && (
+            <p className="mt-0.5 text-xs text-neutral-500">{description}</p>
+          )}
         </div>
-        {connected ? (
-          <button
-            type="button"
-            onClick={disconnect}
-            disabled={working}
-            className="shrink-0 text-xs text-neutral-500 transition hover:text-red-500 disabled:opacity-50 dark:text-neutral-400 dark:hover:text-red-400"
-          >
-            Disconnect
-          </button>
-        ) : (
-          <a
-            href={canConnect ? `/api/oauth/${provider}/start` : undefined}
-            onClick={(e) => {
-              if (!canConnect) e.preventDefault();
-            }}
-            aria-disabled={!canConnect}
-            className={`shrink-0 rounded-md px-4 py-2 text-sm font-medium transition ${
-              canConnect
-                ? "bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-                : "cursor-not-allowed bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500"
-            }`}
-            title={
-              canConnect
-                ? `Connect ${label}`
-                : `Configure your ${label} OAuth app credentials first`
-            }
-          >
-            Connect
-          </a>
-        )}
+        <a
+          href={canConnect ? `/api/oauth/${provider}/start` : undefined}
+          onClick={(e) => {
+            if (!canConnect) e.preventDefault();
+          }}
+          aria-disabled={!canConnect}
+          className={`shrink-0 rounded-md px-4 py-2 text-sm font-medium transition ${
+            canConnect
+              ? "bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+              : "cursor-not-allowed bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500"
+          }`}
+          title={
+            canConnect
+              ? `Connect ${label}`
+              : `Configure your OAuth app credentials first`
+          }
+        >
+          Connect
+        </a>
       </div>
 
       <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-800/60">
@@ -194,7 +167,7 @@ export function OAuthConnect({
           </div>
         </div>
 
-        {hint && !connected && (
+        {hint && (
           <p className="mt-1 text-[11px] text-neutral-500 italic">{hint}</p>
         )}
 

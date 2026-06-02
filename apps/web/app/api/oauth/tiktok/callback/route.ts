@@ -6,6 +6,7 @@ import {
   managerForProvider,
 } from "@agentflow/core";
 import { publicUrl } from "@/lib/public-url";
+import { upsertIntegrationByAccount } from "@/lib/integration-upsert";
 
 const STATE_COOKIE = "tt_oauth_state";
 const VERIFIER_COOKIE = "tt_oauth_verifier";
@@ -61,6 +62,7 @@ export async function GET(request: NextRequest) {
     refresh_token?: string;
     expires_in?: number;
     scope?: string;
+    open_id?: string;
     error?: string;
     error_description?: string;
   } | null;
@@ -75,38 +77,73 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Fetch identity. Display API exposes display_name + username.
+  let accountId = tokenData.open_id ?? null;
+  let handle: string | null = null;
+  let displayName: string | null = null;
+  try {
+    const meRes = await fetch(
+      "https://open.tiktokapis.com/v2/user/info/?fields=open_id,union_id,display_name,username",
+      { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
+    );
+    if (meRes.ok) {
+      const meJson = (await meRes.json()) as {
+        data?: {
+          user?: {
+            open_id?: string;
+            display_name?: string;
+            username?: string;
+          };
+        };
+      };
+      accountId = meJson.data?.user?.open_id ?? accountId;
+      handle = meJson.data?.user?.username ?? null;
+      displayName = meJson.data?.user?.display_name ?? null;
+    }
+  } catch (err) {
+    console.error("tiktok identity fetch failed:", err);
+  }
+
+  if (!accountId) {
+    return NextResponse.redirect(
+      publicUrl(
+        request,
+        `${managerLanding}?error=${encodeURIComponent("tiktok_identity_unavailable")}`,
+      ),
+    );
+  }
+
   const scopes = (tokenData.scope ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   const expiresAt = tokenData.expires_in
     ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
     : null;
 
-  const { error } = await supabase.from("integrations").upsert(
-    {
-      user_id: user.id,
-      domain: "tiktok",
-      provider: "tiktok",
-      encrypted_access_token: encrypt(tokenData.access_token),
-      encrypted_refresh_token: tokenData.refresh_token
-        ? encrypt(tokenData.refresh_token)
-        : null,
-      scopes,
-      expires_at: expiresAt,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id,domain,provider" },
-  );
+  const { error } = await upsertIntegrationByAccount(supabase, {
+    userId: user.id,
+    domain: "tiktok",
+    provider: "tiktok",
+    providerAccountId: accountId,
+    handle,
+    displayName,
+    encryptedAccessToken: encrypt(tokenData.access_token),
+    encryptedRefreshToken: tokenData.refresh_token
+      ? encrypt(tokenData.refresh_token)
+      : null,
+    scopes,
+    expiresAt,
+  });
 
   if (error) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
+        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error)}`,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    publicUrl(request, `${managerLanding}?connected=tiktok`),
+    publicUrl(request, `/integrations?connected=tiktok`),
   );
   response.cookies.delete(STATE_COOKIE);
   response.cookies.delete(VERIFIER_COOKIE);

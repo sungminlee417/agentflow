@@ -2,41 +2,69 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { computeExpiresAt, runVideoIdeasAgent } from "@agentflow/core";
 
-// Top-up refresh. Idempotent and cheap-to-call when nothing's expired:
-// 1. Delete expired + dismissed rows
-// 2. Compute deficit (target_count - pending_remaining)
-// 3. If deficit > 0, run the agent for that many ideas and insert
+// Top-up refresh, account-scoped. integration_id selects which
+// connected account to generate ideas for.
 
 export const maxDuration = 60;
 
-export async function POST(_request: NextRequest) {
+export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return new NextResponse("Unauthorized", { status: 401 });
 
+  const url = new URL(request.url);
+  const body = (await request
+    .json()
+    .catch(() => null)) as { integration_id?: string } | null;
+  const integrationId =
+    body?.integration_id ?? url.searchParams.get("integration_id");
+  if (!integrationId) {
+    return NextResponse.json(
+      { error: "Missing integration_id" },
+      { status: 400 },
+    );
+  }
+
+  // Verify ownership + capture provider.
+  const { data: integration } = await supabase
+    .from("integrations")
+    .select("id, provider")
+    .eq("id", integrationId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!integration) {
+    return NextResponse.json(
+      { error: "Integration not found." },
+      { status: 404 },
+    );
+  }
+
   const nowIso = new Date().toISOString();
 
-  // Prune expired + dismissed
+  // Prune expired + dismissed within this integration's pool.
   await supabase
     .from("video_ideas")
     .delete()
     .eq("user_id", user.id)
+    .eq("integration_id", integrationId)
     .or(`expires_at.lt.${nowIso},status.eq.dismissed`);
 
+  // Per-account settings.
   const { data: settingsRow } = await supabase
     .from("video_ideas_settings")
-    .select("provider, target_count")
+    .select("target_count")
     .eq("user_id", user.id)
+    .eq("integration_id", integrationId)
     .maybeSingle();
-  const provider = (settingsRow?.provider as "tiktok" | undefined) ?? "tiktok";
   const targetCount = settingsRow?.target_count ?? 10;
 
   const { count: pendingCount } = await supabase
     .from("video_ideas")
     .select("id", { count: "exact", head: true })
     .eq("user_id", user.id)
+    .eq("integration_id", integrationId)
     .eq("status", "pending");
 
   const deficit = Math.max(0, targetCount - (pendingCount ?? 0));
@@ -51,8 +79,8 @@ export async function POST(_request: NextRequest) {
   const result = await runVideoIdeasAgent({
     supabase,
     userId: user.id,
+    integrationId,
     count: deficit,
-    provider,
   });
 
   if (!result.ok) {
@@ -64,7 +92,8 @@ export async function POST(_request: NextRequest) {
 
   const rows = (result.ideas ?? []).map((idea) => ({
     user_id: user.id,
-    provider,
+    integration_id: integrationId,
+    provider: integration.provider,
     title: idea.title,
     hook: idea.hook ?? null,
     format: idea.format ?? null,

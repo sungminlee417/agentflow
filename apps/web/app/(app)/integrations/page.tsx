@@ -6,7 +6,8 @@ import {
 import {
   IntegrationsHub,
   type IntegrationAddon,
-  type OAuthIntegration,
+  type ProviderGroup,
+  type ConnectedAccount,
 } from "@/components/integrations-hub";
 import { type UploadRow } from "@/components/analytics-upload";
 
@@ -83,7 +84,12 @@ export default async function IntegrationsPage() {
     { data: uploads },
     { data: serviceKeys },
   ] = await Promise.all([
-    supabase.from("integrations").select("provider, scopes"),
+    supabase
+      .from("integrations")
+      .select(
+        "id, provider, scopes, handle, display_name, account_label, provider_account_id, created_at",
+      )
+      .order("created_at", { ascending: true }),
     supabase
       .from("user_oauth_credentials")
       .select("provider, client_id_last4"),
@@ -94,9 +100,21 @@ export default async function IntegrationsPage() {
     supabase.from("user_service_keys").select("service, key_last4"),
   ]);
 
-  const integrationByProvider = new Map(
-    (integrations ?? []).map((i) => [i.provider as string, i]),
-  );
+  const integrationsByProvider = new Map<string, Array<{
+    id: string;
+    provider: string;
+    scopes: string[] | null;
+    handle: string | null;
+    display_name: string | null;
+    account_label: string | null;
+    provider_account_id: string;
+  }>>();
+  for (const i of integrations ?? []) {
+    const list = integrationsByProvider.get(i.provider as string) ?? [];
+    list.push(i as never);
+    integrationsByProvider.set(i.provider as string, list);
+  }
+
   const credsByProvider = new Map(
     (oauthCreds ?? []).map(
       (c) => [c.provider as string, c.client_id_last4 as string],
@@ -113,10 +131,7 @@ export default async function IntegrationsPage() {
   );
 
   // Apify lives inside the TikTok integration's modal as an optional
-  // add-on, since it's TikTok-specific (trend search + transcription
-  // source). Same encrypted store backs both surfaces.
-  const apifyConfigured = serviceByName.has("apify");
-  const apifyLast4 = serviceByName.get("apify") ?? null;
+  // add-on.
   const apifyAddon: IntegrationAddon = {
     service: "apify",
     label: "Apify (trend research)",
@@ -127,35 +142,44 @@ export default async function IntegrationsPage() {
     keyHint: "apify_api_...",
     unlocksDescription:
       "Once set, the agent gains: tiktok_search_hashtag, tiktok_search_keyword, tiktok_get_profile (competitor lookup). With an OpenAI key (Settings → AI provider keys), also unlocks tiktok_transcribe_video.",
-    configured: apifyConfigured,
-    keyLast4: apifyLast4,
+    configured: serviceByName.has("apify"),
+    keyLast4: serviceByName.get("apify") ?? null,
   };
 
-  const oauth: OAuthIntegration[] = [];
+  const providers: ProviderGroup[] = [];
   for (const p of OAUTH_PROVIDERS) {
-    const integration = integrationByProvider.get(p.provider);
     let source: "user" | "env" | null = null;
     if (user) {
       const resolved = await getOAuthCredentials(supabase, user.id, p.provider);
       source = resolved?.source ?? null;
     }
-    oauth.push({
+
+    const accounts: ConnectedAccount[] = (
+      integrationsByProvider.get(p.provider) ?? []
+    ).map((i) => ({
+      id: i.id,
+      handle: i.handle,
+      displayName: i.display_name,
+      accountLabel: i.account_label,
+      providerAccountId: i.provider_account_id,
+      scopes: (i.scopes as string[] | null) ?? [],
+    }));
+
+    providers.push({
       provider: p.provider,
       label: p.label,
       group: p.group,
       description: p.description,
       hint: p.hint,
-      connected: !!integration,
-      scopes: (integration?.scopes as string[] | undefined) ?? [],
+      accounts,
       credentialsConfigured: !!source,
       credentialsLast4: credsByProvider.get(p.provider) ?? null,
       credentialsSource: source,
       uploads: uploadsByProvider.get(p.provider) ?? [],
       uploadHint: p.uploadHint,
-      // TikTok-specific: surface Apify in the TikTok modal as an addon
       addons: p.provider === "tiktok" ? [apifyAddon] : undefined,
     });
   }
 
-  return <IntegrationsHub oauth={oauth} />;
+  return <IntegrationsHub providers={providers} />;
 }

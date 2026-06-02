@@ -15,6 +15,7 @@ import { getOAuthCredentials, type OAuthProvider } from "./oauth-credentials";
 // error to the agent — better than silently swallowing it.
 
 type IntegrationRow = {
+  id?: string;
   encrypted_access_token: string;
   encrypted_refresh_token: string | null;
   expires_at: string | null;
@@ -51,7 +52,9 @@ export async function getFreshAccessToken(
       ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
       : null;
 
-    await supabase
+    // Scope the update by integration id when we have it — multiple
+    // accounts may exist for the same (user, provider) now.
+    let updateQuery = supabase
       .from("integrations")
       .update({
         encrypted_access_token: encrypt(refreshed.access_token),
@@ -63,6 +66,8 @@ export async function getFreshAccessToken(
       })
       .eq("user_id", userId)
       .eq("provider", provider);
+    if (row.id) updateQuery = updateQuery.eq("id", row.id);
+    await updateQuery;
 
     return refreshed.access_token;
   } catch (err) {

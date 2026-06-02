@@ -6,6 +6,7 @@ import {
   managerForProvider,
 } from "@agentflow/core";
 import { publicUrl } from "@/lib/public-url";
+import { upsertIntegrationByAccount } from "@/lib/integration-upsert";
 
 const STATE_COOKIE = "gh_oauth_state";
 
@@ -70,36 +71,71 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // GitHub /user gives the canonical account identity.
+  let accountId: string | null = null;
+  let handle: string | null = null;
+  let displayName: string | null = null;
+  try {
+    const meRes = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "agentflow",
+      },
+    });
+    if (meRes.ok) {
+      const me = (await meRes.json()) as {
+        id?: number;
+        login?: string;
+        name?: string;
+      };
+      accountId = me.id != null ? String(me.id) : null;
+      handle = me.login ?? null;
+      displayName = me.name ?? me.login ?? null;
+    }
+  } catch (err) {
+    console.error("github identity fetch failed:", err);
+  }
+
+  if (!accountId) {
+    return NextResponse.redirect(
+      publicUrl(
+        request,
+        `${managerLanding}?error=${encodeURIComponent("github_identity_unavailable")}`,
+      ),
+    );
+  }
+
   const scopes = (tokenData.scope ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const { error } = await supabase.from("integrations").upsert(
-    {
-      user_id: user.id,
-      domain: "github",
-      provider: "github",
-      encrypted_access_token: encrypt(tokenData.access_token),
-      encrypted_refresh_token: null,
-      scopes,
-      expires_at: null,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id,domain,provider" },
-  );
+  const { error } = await upsertIntegrationByAccount(supabase, {
+    userId: user.id,
+    domain: "github",
+    provider: "github",
+    providerAccountId: accountId,
+    handle,
+    displayName,
+    encryptedAccessToken: encrypt(tokenData.access_token),
+    encryptedRefreshToken: null,
+    scopes,
+    expiresAt: null,
+  });
 
   if (error) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error.message)}`,
+        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error)}`,
       ),
     );
   }
 
   const response = NextResponse.redirect(
-    publicUrl(request, `${managerLanding}?connected=github`),
+    publicUrl(request, `/integrations?connected=github`),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;
