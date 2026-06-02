@@ -1,14 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Shared OAuth-callback upsert. Now multi-account aware:
+// Shared OAuth-callback upsert. Multi-account aware:
 //   • If a row exists for (user, provider, real provider_account_id),
 //     update its tokens — the user is reconnecting the same account.
-//   • Else if a row exists for (user, provider, 'legacy') — a row
-//     migrated from the pre-multi-account schema — upgrade its
-//     provider_account_id to the real one and update everything else.
-//     This preserves any video_ideas / video_ideas_settings pointing
-//     at that integration_id.
 //   • Else insert a new row.
+//
+// Legacy rows (provider_account_id='legacy' from the multi-account
+// migration) are NOT auto-upgraded — we'd have to guess which account
+// the legacy row belonged to, and a wrong guess silently hijacks one
+// account's row with another account's identity. Users with legacy
+// rows should disconnect them explicitly from /integrations.
 
 export type UpsertArgs = {
   userId: string;
@@ -58,23 +59,7 @@ export async function upsertIntegrationByAccount(
     return { error: error?.message ?? null, integrationId: existing.id };
   }
 
-  // 2. Legacy row from pre-multi-account schema → upgrade in place.
-  const { data: legacy } = await supabase
-    .from("integrations")
-    .select("id")
-    .eq("user_id", args.userId)
-    .eq("provider", args.provider)
-    .eq("provider_account_id", "legacy")
-    .maybeSingle();
-  if (legacy?.id) {
-    const { error } = await supabase
-      .from("integrations")
-      .update(baseFields)
-      .eq("id", legacy.id);
-    return { error: error?.message ?? null, integrationId: legacy.id };
-  }
-
-  // 3. Fresh row.
+  // 2. Fresh row.
   const { data: inserted, error } = await supabase
     .from("integrations")
     .insert(baseFields)
