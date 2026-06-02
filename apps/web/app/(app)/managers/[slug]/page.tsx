@@ -18,7 +18,7 @@ export default async function ManagerPage({
   if (!manager) notFound();
 
   const supabase = await createSupabaseServerClient();
-  const [{ data: integrations }, { data: automations }, { data: runs }, { data: serviceKeys }] =
+  const [{ data: integrations }, { data: automations }, { data: runs }] =
     await Promise.all([
       supabase
         .from("integrations")
@@ -36,15 +36,10 @@ export default async function ManagerPage({
       supabase
         .from("automation_runs")
         .select(
-          "id, automation_id, issue_number, status, pr_url, pr_number, error, report_markdown, started_at, finished_at",
+          "id, automation_id, issue_number, status, pr_url, pr_number, error, started_at, finished_at",
         )
         .order("started_at", { ascending: false })
         .limit(100),
-      manager.slug === "social"
-        ? supabase
-            .from("user_service_keys")
-            .select("service, key_last4")
-        : Promise.resolve({ data: [] }),
     ]);
 
   const automationIds = new Set(
@@ -57,9 +52,6 @@ export default async function ManagerPage({
   const connectedProviders = (integrations ?? []).map(
     (i) => i.provider as string,
   );
-  if ((serviceKeys ?? []).some((k) => k.service === "apify")) {
-    connectedProviders.push("apify");
-  }
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
@@ -97,9 +89,6 @@ export default async function ManagerPage({
   );
 }
 
-// Compact connection-status strip — no config controls, just badges
-// with a link to /integrations for setup. The manager page itself is
-// for ACTIVITY, not configuration.
 function ConnectionStatus({
   providers,
   connected,

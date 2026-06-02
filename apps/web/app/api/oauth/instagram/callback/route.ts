@@ -1,10 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import {
-  encrypt,
-  getOAuthCredentials,
-  managerForProvider,
-} from "@agentflow/core";
+import { encrypt, getOAuthCredentials } from "@agentflow/core";
 import { publicUrl } from "@/lib/public-url";
 import { upsertIntegrationByAccount } from "@/lib/integration-upsert";
 
@@ -17,11 +13,6 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
-  const managerLanding =
-    managerForProvider("instagram")?.slug
-      ? `/managers/${managerForProvider("instagram")!.slug}`
-      : "/settings";
-
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -29,14 +20,14 @@ export async function GET(request: NextRequest) {
 
   if (!code || !state || state !== cookieState) {
     return NextResponse.redirect(
-      publicUrl(request, `${managerLanding}?error=oauth_state_mismatch`),
+      publicUrl(request, `/integrations?error=oauth_state_mismatch`),
     );
   }
 
   const creds = await getOAuthCredentials(supabase, user.id, "instagram");
   if (!creds) {
     return NextResponse.redirect(
-      publicUrl(request, `${managerLanding}?error=oauth_app_not_configured`),
+      publicUrl(request, `/integrations?error=oauth_app_not_configured`),
     );
   }
 
@@ -63,7 +54,7 @@ export async function GET(request: NextRequest) {
     const errMsg = shortData?.error_message ?? "exchange_failed";
     return NextResponse.redirect(
       new URL(
-        `${managerLanding}?error=${encodeURIComponent(`instagram_exchange_failed:${errMsg}`)}`,
+        `/integrations?error=${encodeURIComponent(`instagram_exchange_failed:${errMsg}`)}`,
         request.url,
       ),
     );
@@ -106,7 +97,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("instagram_identity_unavailable")}`,
+        `/integrations?error=${encodeURIComponent("instagram_identity_unavailable")}`,
       ),
     );
   }
@@ -131,7 +122,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error)}`,
+        `/integrations?error=${encodeURIComponent("store_failed:" + error)}`,
       ),
     );
   }

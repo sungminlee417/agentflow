@@ -1,10 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import {
-  encrypt,
-  getOAuthCredentials,
-  managerForProvider,
-} from "@agentflow/core";
+import { encrypt, getOAuthCredentials } from "@agentflow/core";
 import { publicUrl } from "@/lib/public-url";
 import { upsertIntegrationByAccount } from "@/lib/integration-upsert";
 
@@ -18,11 +14,6 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.redirect(publicUrl(request, "/login"));
 
-  const managerLanding =
-    managerForProvider("tiktok")?.slug
-      ? `/managers/${managerForProvider("tiktok")!.slug}`
-      : "/settings";
-
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -31,14 +22,14 @@ export async function GET(request: NextRequest) {
 
   if (!code || !state || state !== cookieState || !codeVerifier) {
     return NextResponse.redirect(
-      publicUrl(request, `${managerLanding}?error=oauth_state_mismatch`),
+      publicUrl(request, `/integrations?error=oauth_state_mismatch`),
     );
   }
 
   const creds = await getOAuthCredentials(supabase, user.id, "tiktok");
   if (!creds) {
     return NextResponse.redirect(
-      publicUrl(request, `${managerLanding}?error=oauth_app_not_configured`),
+      publicUrl(request, `/integrations?error=oauth_app_not_configured`),
     );
   }
 
@@ -72,7 +63,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent(`tiktok_exchange_failed:${errMsg}`)}`,
+        `/integrations?error=${encodeURIComponent(`tiktok_exchange_failed:${errMsg}`)}`,
       ),
     );
   }
@@ -112,7 +103,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("tiktok_identity_unavailable")}`,
+        `/integrations?error=${encodeURIComponent("tiktok_identity_unavailable")}`,
       ),
     );
   }
@@ -144,7 +135,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(
       publicUrl(
         request,
-        `${managerLanding}?error=${encodeURIComponent("store_failed:" + error)}`,
+        `/integrations?error=${encodeURIComponent("store_failed:" + error)}`,
       ),
     );
   }

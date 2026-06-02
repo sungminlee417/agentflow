@@ -5,13 +5,11 @@ import { useRouter } from "next/navigation";
 import {
   AUTOMATION_TYPES,
   SCHEDULE_OPTIONS,
-  isSocialBrief,
   getAutomationTypeMeta,
   type AutomationKind,
   type AutomationSchedule,
   type AutomationTypeMeta,
 } from "@agentflow/core";
-import { Markdown } from "@/components/markdown";
 import { useConfirm } from "@/components/confirm-dialog";
 
 export type AutomationRow = {
@@ -32,7 +30,6 @@ export type AutomationRunRow = {
   pr_url: string | null;
   pr_number: number | null;
   error: string | null;
-  report_markdown?: string | null;
   started_at: string;
   finished_at: string | null;
 };
@@ -361,7 +358,6 @@ export function AutomationsSection({
                           <RunRowView
                             key={r.id}
                             r={r}
-                            isSocial={isSocialBrief(a.type)}
                             onDelete={deleteRun}
                           />
                         ))}
@@ -408,21 +404,16 @@ export function AutomationsSection({
 
 function RunRowView({
   r,
-  isSocial,
   onDelete,
 }: {
   r: AutomationRunRow;
-  isSocial: boolean;
   onDelete: (id: string, status: AutomationRunRow["status"]) => void;
 }) {
   return (
     <li className="rounded-md border border-neutral-100 p-2 text-neutral-600 dark:border-neutral-800/60 dark:text-neutral-400">
       <div className="flex items-center justify-between gap-2">
         <span>
-          {isSocial
-            ? new Date(r.started_at).toLocaleString()
-            : `#${r.issue_number ?? "?"}`}{" "}
-          ·{" "}
+          #{r.issue_number ?? "?"} ·{" "}
           <span
             className={
               r.status === "done"
@@ -457,17 +448,6 @@ function RunRowView({
           </button>
         </span>
       </div>
-
-      {isSocial && r.report_markdown && (
-        <details className="mt-2 rounded border border-neutral-200 bg-white p-2 dark:border-neutral-800 dark:bg-neutral-950">
-          <summary className="cursor-pointer text-[11px] text-neutral-500">
-            View brief ({Math.round(r.report_markdown.length / 1024)}KB)
-          </summary>
-          <div className="mt-2 max-h-[60vh] overflow-auto text-[13px] text-neutral-900 dark:text-neutral-100">
-            <Markdown>{r.report_markdown}</Markdown>
-          </div>
-        </details>
-      )}
     </li>
   );
 }

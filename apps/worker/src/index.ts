@@ -1,16 +1,6 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
-import {
-  decrypt,
-  isSocialBrief,
-  isSocialScripts,
-  runIssueAgent,
-  runSocialBriefAgent,
-  runSocialScriptsAgent,
-  type AutomationSchedule,
-  type SocialBriefKind,
-  type SocialScriptsKind,
-} from "@agentflow/core";
+import { decrypt, runIssueAgent } from "@agentflow/core";
 
 // Worker entry point.
 //
@@ -19,17 +9,12 @@ import {
 // service role to bypass RLS — we're a trusted backend with the master
 // encryption key and the user's encrypted credentials.
 //
-// GitHub automations process at most one new issue per tick. Social
-// brief automations run on a fixed schedule (daily / weekly).
+// Currently only github_issue_to_pr lives here. Social-media surfaces
+// (briefs + scripts) moved into Video Ideas (the live list) + Chat
+// (for one-off briefs) and are no longer scheduled.
 
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 30_000);
 const MAX_CONCURRENT_PER_TICK = 5;
-
-const SCHEDULE_INTERVAL_MS: Record<AutomationSchedule, number | null> = {
-  manual: null, // never auto-run
-  daily: 24 * 60 * 60 * 1000,
-  weekly: 7 * 24 * 60 * 60 * 1000,
-};
 
 const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -52,9 +37,7 @@ type Automation = {
   id: string;
   user_id: string;
   type: string;
-  config: { repo?: string; focus?: string } & Record<string, unknown>;
-  schedule: AutomationSchedule;
-  last_run_at: string | null;
+  config: { repo?: string } & Record<string, unknown>;
 };
 
 async function loadGitHubToken(userId: string): Promise<string | null> {
@@ -195,147 +178,9 @@ async function processIssueAutomation(a: Automation): Promise<void> {
   );
 }
 
-function isDueForSchedule(
-  schedule: AutomationSchedule,
-  lastRunAt: string | null,
-): boolean {
-  const interval = SCHEDULE_INTERVAL_MS[schedule];
-  if (interval === null) return false; // manual
-  if (!lastRunAt) return true;
-  return Date.now() - new Date(lastRunAt).getTime() >= interval;
-}
-
-async function processSocialBriefAutomation(a: Automation): Promise<void> {
-  if (!isDueForSchedule(a.schedule, a.last_run_at)) return;
-
-  console.log(
-    `[worker] automation ${a.id} (${a.type}) → running social brief`,
-  );
-
-  const { data: run, error: runErr } = await supabase
-    .from("automation_runs")
-    .insert({
-      automation_id: a.id,
-      user_id: a.user_id,
-      status: "running",
-    })
-    .select("id")
-    .single();
-  if (runErr || !run) {
-    console.error(`[worker] failed to record social run:`, runErr);
-    return;
-  }
-
-  const focus =
-    typeof a.config.focus === "string" ? a.config.focus : undefined;
-
-  const result = await runSocialBriefAgent({
-    supabase,
-    userId: a.user_id,
-    type: a.type as SocialBriefKind,
-    focus,
-    onStep: async ({ count, description }) => {
-      await supabase
-        .from("automation_runs")
-        .update({ step_count: count, last_step: description })
-        .eq("id", run.id);
-    },
-  });
-
-  await supabase
-    .from("automation_runs")
-    .update({
-      status: result.ok ? "done" : "failed",
-      tokens: result.tokens ?? null,
-      error: result.error ?? null,
-      report_markdown: result.report_markdown ?? null,
-      finished_at: new Date().toISOString(),
-    })
-    .eq("id", run.id);
-
-  await supabase
-    .from("automations")
-    .update({ last_run_at: new Date().toISOString() })
-    .eq("id", a.id);
-
-  console.log(
-    `[worker] automation ${a.id} done: ${
-      result.ok ? `brief produced (${result.report_markdown?.length ?? 0} chars)` : `failed: ${result.error}`
-    }`,
-  );
-}
-
-async function processSocialScriptsAutomation(a: Automation): Promise<void> {
-  if (!isDueForSchedule(a.schedule, a.last_run_at)) return;
-
-  console.log(
-    `[worker] automation ${a.id} (${a.type}) → producing video scripts`,
-  );
-
-  const { data: run, error: runErr } = await supabase
-    .from("automation_runs")
-    .insert({
-      automation_id: a.id,
-      user_id: a.user_id,
-      status: "running",
-    })
-    .select("id")
-    .single();
-  if (runErr || !run) {
-    console.error(`[worker] failed to record scripts run:`, runErr);
-    return;
-  }
-
-  const focus =
-    typeof a.config.focus === "string" ? a.config.focus : undefined;
-
-  const result = await runSocialScriptsAgent({
-    supabase,
-    userId: a.user_id,
-    type: a.type as SocialScriptsKind,
-    focus,
-    onStep: async ({ count, description }) => {
-      await supabase
-        .from("automation_runs")
-        .update({ step_count: count, last_step: description })
-        .eq("id", run.id);
-    },
-  });
-
-  await supabase
-    .from("automation_runs")
-    .update({
-      status: result.ok ? "done" : "failed",
-      tokens: result.tokens ?? null,
-      error: result.error ?? null,
-      report_markdown: result.report_markdown ?? null,
-      finished_at: new Date().toISOString(),
-    })
-    .eq("id", run.id);
-
-  await supabase
-    .from("automations")
-    .update({ last_run_at: new Date().toISOString() })
-    .eq("id", a.id);
-
-  console.log(
-    `[worker] automation ${a.id} done: ${
-      result.ok
-        ? `scripts produced (${result.report_markdown?.length ?? 0} chars)`
-        : `failed: ${result.error}`
-    }`,
-  );
-}
-
 async function processAutomation(a: Automation): Promise<void> {
   if (a.type === "github_issue_to_pr") {
     return processIssueAutomation(a);
-  }
-  if (isSocialBrief(a.type)) {
-    return processSocialBriefAutomation(a);
-  }
-  if (isSocialScripts(a.type)) {
-    return processSocialScriptsAutomation(a);
   }
   console.warn(`[worker] unknown automation type: ${a.type}`);
 }
@@ -343,7 +188,7 @@ async function processAutomation(a: Automation): Promise<void> {
 async function tick(): Promise<void> {
   const { data: automations, error } = await supabase
     .from("automations")
-    .select("id, user_id, type, config, schedule, last_run_at")
+    .select("id, user_id, type, config")
     .eq("enabled", true);
   if (error) {
     console.error(`[worker] load automations failed:`, error);

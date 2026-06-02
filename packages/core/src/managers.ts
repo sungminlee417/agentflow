@@ -9,7 +9,7 @@
 // The sidebar and per-manager dashboard are driven by this list, so
 // no new UI scaffolding is needed.
 
-export type ManagerSlug = "code" | "social";
+export type ManagerSlug = "code";
 
 export type Manager = {
   slug: ManagerSlug;
@@ -31,23 +31,6 @@ export const MANAGERS: Manager[] = [
       "Watch GitHub repos for new issues, read code, and open PRs autonomously.",
     automationTypes: ["github_issue_to_pr"],
     integrationProviders: ["github"],
-    status: "available",
-  },
-  {
-    slug: "social",
-    label: "Social Media",
-    description:
-      "Analytics, content ideas, and comment workflows across YouTube, TikTok, and Instagram.",
-    automationTypes: [
-      "social_scripts_youtube",
-      "social_scripts_tiktok",
-      "social_scripts_instagram",
-      "social_brief_youtube",
-      "social_brief_tiktok",
-      "social_brief_instagram",
-      "social_brief_cross_platform",
-    ],
-    integrationProviders: ["youtube", "tiktok", "instagram"],
     status: "available",
   },
 ];

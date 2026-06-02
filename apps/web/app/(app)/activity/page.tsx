@@ -8,7 +8,7 @@ export default async function ActivityPage() {
     supabase
       .from("automation_runs")
       .select(
-        "id, automation_id, issue_number, status, pr_url, pr_number, error, summary, tokens, step_count, last_step, report_markdown, started_at, finished_at",
+        "id, automation_id, issue_number, status, pr_url, pr_number, error, summary, tokens, step_count, last_step, started_at, finished_at",
       )
       .order("started_at", { ascending: false })
       .limit(100),

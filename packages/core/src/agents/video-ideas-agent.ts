@@ -125,18 +125,43 @@ Critical:
 - rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").
 
 Upload-ready content for EVERY idea — the creator should be able to record + post directly from the card without writing anything new:
-- script: full beat-by-beat script with timestamps. Format as:
-    "0-3s (HOOK): <exact first line spoken or shown on screen>
-     3-10s (BEAT 1): <what happens, what's said>
-     10-25s (BEAT 2): <the meat — actual value or twist>
-     25-40s (BEAT 3): <payoff + setup to CTA>
-     40s (CTA): <the ask>"
-   Match the creator's voice + pacing from tiktok_list_my_videos. Use plain text with line breaks.
+
+- script: a SHOOT-READY breakdown the creator can follow shot-for-shot. Structure it as labeled time-stamped blocks, one per line, each containing EVERY relevant cue. Required block types in this order:
+
+    [0:00-0:03] HOOK
+      📢 SAY: "<the exact words to speak, in quotes>"  (or write SHOW: if it's silent text)
+      🎬 ACTION: <what you're doing on camera — pick up the guitar, lean in, jump-cut from one frame to another>
+      📺 ON-SCREEN TEXT: "<exact words to put on screen, in quotes>" (or "none")
+      🎵 AUDIO: <music cue, original audio, ambient — be specific>
+
+    [0:03-0:10] BEAT 1 — Setup
+      📢 SAY: "<...>"
+      🎬 ACTION: <...>
+      📺 ON-SCREEN TEXT: "<...>"
+
+    [0:10-0:25] BEAT 2 — Payoff / Demo
+      📢 SAY: "<...>"
+      🎬 ACTION: <...>
+      📺 ON-SCREEN TEXT: "<...>"
+      ✂️ CUT: <transition note — hard cut, whip pan, match cut on a specific motion>
+
+    [0:25-0:35] BEAT 3 — Twist / Comparison
+      📢 SAY: "<...>"
+      🎬 ACTION: <...>
+      📺 ON-SCREEN TEXT: "<...>"
+
+    [0:35-0:40] CTA
+      📢 SAY: "<the explicit ask, word-for-word>"
+      📺 ON-SCREEN TEXT: "<short version of the ask, e.g. 'COMMENT YOUR PICK 👇'>"
+      🎬 ACTION: <gesture toward comments, hold a still frame, etc.>
+
+    The creator should not have to think — every spoken line, every on-screen text overlay, every camera action is explicit. Times are guidelines (TikTok ≤60s); adjust block lengths to fit but keep the HOOK ≤3s and CTA ≤5s. Match the creator's voice and pacing from tiktok_list_my_videos / tiktok_top_my_videos — never invent a personality.
+
 - post_title: the catchy headline that goes at the top of the caption (≤100 chars, attention-grabbing question or claim).
 - description: full caption body — 2-3 short paragraphs, conversational, ending with the CTA. Do NOT include hashtags here; they go in the hashtags field.
 - hashtags: 5-7 strings WITHOUT the leading '#'. Mix broad-niche (e.g. "guitar") with specific (e.g. "fingerstyle") with one or two trend tags if available from your tool calls. NEVER invent a hashtag.
 - cta: one explicit ask in a single sentence ("Comment 'nylon' or 'steel' below 👇").
-- visual_notes: 2-4 bullets on what to film, transitions, on-screen text, B-roll, lighting. Plain text, "• " prefix per bullet.
+- visual_notes: 4-6 short bullets covering things NOT already in the script blocks — overall lighting setup, framing (close-up vs wide), props/wardrobe, B-roll inserts, color grade, anything specific to your shooting setup. Plain text, "• " prefix per bullet.
 
 Return ONLY a JSON object {ideas: [...]} matching the schema below. No commentary, no markdown, no code fence.
 
