@@ -8,6 +8,21 @@ import { AnalyticsUpload, type UploadRow } from "@/components/analytics-upload";
 
 type Status = "connected" | "configured" | "unconfigured";
 
+// Inline addon — a service the user can optionally configure to enhance
+// a specific OAuth integration. Currently only Apify (which enhances
+// TikTok with trend search + transcription source).
+export type IntegrationAddon = {
+  service: "apify";
+  label: string;
+  description: string;
+  hint?: string;
+  keyHint: string;
+  /** Markdown-ish description of which tools this unlocks once set */
+  unlocksDescription?: string;
+  configured: boolean;
+  keyLast4: string | null;
+};
+
 export type OAuthIntegration = {
   provider: "github" | "youtube" | "tiktok" | "instagram";
   label: string;
@@ -23,20 +38,9 @@ export type OAuthIntegration = {
   uploads?: UploadRow[];
   /** Only for social: human-readable upload card description */
   uploadHint?: { label: string; description: string };
+  /** Optional service addons to render inside this integration's modal */
+  addons?: IntegrationAddon[];
 };
-
-export type ServiceIntegration = {
-  service: "apify";
-  label: string;
-  group: "services";
-  description: string;
-  hint?: string;
-  keyHint: string;
-  configured: boolean;
-  keyLast4: string | null;
-};
-
-export type AnyIntegration = OAuthIntegration | ServiceIntegration;
 
 function statusForOAuth(i: OAuthIntegration): Status {
   if (i.connected) return "connected";
@@ -84,7 +88,7 @@ function Row({
   onConfigure,
 }: {
   label: string;
-  status: Status | "service";
+  status: Status;
   description: string;
   onConfigure: () => void;
 }) {
@@ -99,7 +103,7 @@ function Row({
           <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
             {label}
           </span>
-          {status !== "service" && <StatusPill status={status} />}
+          <StatusPill status={status} />
         </div>
         <p className="mt-1 text-xs text-neutral-500">{description}</p>
       </div>
@@ -110,10 +114,8 @@ function Row({
 
 export function IntegrationsHub({
   oauth,
-  services,
 }: {
   oauth: OAuthIntegration[];
-  services: ServiceIntegration[];
 }) {
   const [open, setOpen] = useState<string | null>(null);
 
@@ -128,8 +130,9 @@ export function IntegrationsHub({
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
           Connect your accounts, paste OAuth app credentials, and upload
-          analytics exports. Each integration's full configuration lives in
-          its own modal — click any row.
+          analytics exports. Each integration's full configuration — including
+          any optional service keys (e.g. Apify for TikTok) — lives in its own
+          modal. Click any row.
         </p>
       </header>
 
@@ -167,28 +170,7 @@ export function IntegrationsHub({
         </section>
       )}
 
-      {services.length > 0 && (
-        <section className="mt-10">
-          <GroupLabel>Services</GroupLabel>
-          <div className="space-y-3">
-            {services.map((s) => (
-              <Row
-                key={s.service}
-                label={s.label}
-                status="service"
-                description={
-                  s.configured
-                    ? `Configured · ends in ${s.keyLast4}`
-                    : s.description
-                }
-                onConfigure={() => setOpen(`service:${s.service}`)}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* ── OAuth integration modals ────────────────────────────────── */}
+      {/* ── Integration modals ──────────────────────────────────────── */}
       {oauth.map((i) => (
         <Modal
           key={i.provider}
@@ -197,7 +179,7 @@ export function IntegrationsHub({
           title={i.label}
           subtitle={i.description}
         >
-          <div className="space-y-5">
+          <div className="space-y-6">
             <OAuthConnect
               provider={i.provider}
               label={i.label}
@@ -223,27 +205,28 @@ export function IntegrationsHub({
                 />
               </div>
             )}
-          </div>
-        </Modal>
-      ))}
 
-      {/* ── Service modals ──────────────────────────────────────────── */}
-      {services.map((s) => (
-        <Modal
-          key={s.service}
-          open={open === `service:${s.service}`}
-          onClose={() => setOpen(null)}
-          title={s.label}
-          subtitle={s.description}
-        >
-          <ServiceKeyForm
-            service={s.service}
-            label={s.label}
-            description={s.description}
-            hint={s.hint}
-            keyHint={s.keyHint}
-            existingLast4={s.keyLast4}
-          />
+            {(i.addons ?? []).map((addon) => (
+              <div key={addon.service}>
+                <h3 className="mb-2 text-xs font-medium tracking-wide text-neutral-500 uppercase">
+                  Add-on: {addon.label}
+                </h3>
+                <ServiceKeyForm
+                  service={addon.service}
+                  label={addon.label}
+                  description={addon.description}
+                  hint={addon.hint}
+                  keyHint={addon.keyHint}
+                  existingLast4={addon.keyLast4}
+                />
+                {addon.unlocksDescription && (
+                  <p className="mt-2 text-[11px] text-neutral-500">
+                    {addon.unlocksDescription}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
         </Modal>
       ))}
     </div>

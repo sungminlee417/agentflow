@@ -5,8 +5,8 @@ import {
 } from "@agentflow/core";
 import {
   IntegrationsHub,
+  type IntegrationAddon,
   type OAuthIntegration,
-  type ServiceIntegration,
 } from "@/components/integrations-hub";
 import { type UploadRow } from "@/components/analytics-upload";
 
@@ -71,17 +71,6 @@ const OAUTH_PROVIDERS: Array<{
   },
 ];
 
-const SERVICE_PROVIDERS = [
-  {
-    service: "apify" as const,
-    label: "Apify",
-    description:
-      "TikTok niche search + competitor profile lookups via the clockworks/tiktok-scraper actor. Pay-per-call (~$0.30 / 100 results).",
-    hint: 'Get a token at https://console.apify.com/account/integrations.',
-    keyHint: "apify_api_...",
-  },
-];
-
 export default async function IntegrationsPage() {
   const supabase = await createSupabaseServerClient();
   const {
@@ -123,6 +112,25 @@ export default async function IntegrationsPage() {
     (serviceKeys ?? []).map((k) => [k.service as string, k.key_last4 as string]),
   );
 
+  // Apify lives inside the TikTok integration's modal as an optional
+  // add-on, since it's TikTok-specific (trend search + transcription
+  // source). Same encrypted store backs both surfaces.
+  const apifyConfigured = serviceByName.has("apify");
+  const apifyLast4 = serviceByName.get("apify") ?? null;
+  const apifyAddon: IntegrationAddon = {
+    service: "apify",
+    label: "Apify (trend research)",
+    description:
+      "Powers TikTok niche/keyword search + competitor profile lookups, and is the video-URL source for transcription. ~$0.30 per 100 scraped results.",
+    hint:
+      'Get a token at https://console.apify.com/account/integrations. We use the "clockworks/tiktok-scraper" actor.',
+    keyHint: "apify_api_...",
+    unlocksDescription:
+      "Once set, the agent gains: tiktok_search_hashtag, tiktok_search_keyword, tiktok_get_profile (competitor lookup). With an OpenAI key (Settings → AI provider keys), also unlocks tiktok_transcribe_video.",
+    configured: apifyConfigured,
+    keyLast4: apifyLast4,
+  };
+
   const oauth: OAuthIntegration[] = [];
   for (const p of OAUTH_PROVIDERS) {
     const integration = integrationByProvider.get(p.provider);
@@ -144,19 +152,10 @@ export default async function IntegrationsPage() {
       credentialsSource: source,
       uploads: uploadsByProvider.get(p.provider) ?? [],
       uploadHint: p.uploadHint,
+      // TikTok-specific: surface Apify in the TikTok modal as an addon
+      addons: p.provider === "tiktok" ? [apifyAddon] : undefined,
     });
   }
 
-  const services: ServiceIntegration[] = SERVICE_PROVIDERS.map((s) => ({
-    service: s.service,
-    label: s.label,
-    group: "services",
-    description: s.description,
-    hint: s.hint,
-    keyHint: s.keyHint,
-    configured: serviceByName.has(s.service),
-    keyLast4: serviceByName.get(s.service) ?? null,
-  }));
-
-  return <IntegrationsHub oauth={oauth} services={services} />;
+  return <IntegrationsHub oauth={oauth} />;
 }
