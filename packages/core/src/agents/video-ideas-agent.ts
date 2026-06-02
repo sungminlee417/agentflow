@@ -27,6 +27,19 @@ export type GeneratedIdea = {
   source_refs?: Record<string, unknown>;
   /** Only meaningful for seasonal — a hard date the idea should ship by. */
   hard_date?: string;
+  // Upload-ready content:
+  /** Full beat-by-beat script ready to record. */
+  script?: string;
+  /** Suggested post title (TikTok caption headline, ≤100 chars). */
+  post_title?: string;
+  /** Full caption/description text. */
+  description?: string;
+  /** Suggested hashtags WITHOUT the leading #. */
+  hashtags?: string[];
+  /** Specific CTA line. */
+  cta?: string;
+  /** Notes on visuals, transitions, on-screen text, B-roll. */
+  visual_notes?: string;
 };
 
 export type VideoIdeasResult = {
@@ -44,6 +57,12 @@ const IDEA_SCHEMA = z.object({
   kind: z.enum(["pattern", "trend", "competitor", "seasonal"]),
   source_refs: z.record(z.string(), z.unknown()).nullish(),
   hard_date: z.string().nullish(),
+  script: z.string().nullish(),
+  post_title: z.string().nullish(),
+  description: z.string().nullish(),
+  hashtags: z.array(z.string()).nullish(),
+  cta: z.string().nullish(),
+  visual_notes: z.string().nullish(),
 });
 
 // Accept either { ideas: [...] } or a bare [...].
@@ -102,7 +121,22 @@ Critical:
 - hook must be the actual first spoken/shown line.
 - format should be short ("acoustic vs classical comparison", "solo performance with text overlay").
 - rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").
-- Return ONLY a JSON object {ideas: [...]} matching the schema. No commentary, no markdown, no code fence.
+
+Upload-ready content for EVERY idea — the creator should be able to record + post directly from the card without writing anything new:
+- script: full beat-by-beat script with timestamps. Format as:
+    "0-3s (HOOK): <exact first line spoken or shown on screen>
+     3-10s (BEAT 1): <what happens, what's said>
+     10-25s (BEAT 2): <the meat — actual value or twist>
+     25-40s (BEAT 3): <payoff + setup to CTA>
+     40s (CTA): <the ask>"
+   Match the creator's voice + pacing from tiktok_list_my_videos. Use plain text with line breaks.
+- post_title: the catchy headline that goes at the top of the caption (≤100 chars, attention-grabbing question or claim).
+- description: full caption body — 2-3 short paragraphs, conversational, ending with the CTA. Do NOT include hashtags here; they go in the hashtags field.
+- hashtags: 5-7 strings WITHOUT the leading '#'. Mix broad-niche (e.g. "guitar") with specific (e.g. "fingerstyle") with one or two trend tags if available from your tool calls. NEVER invent a hashtag.
+- cta: one explicit ask in a single sentence ("Comment 'nylon' or 'steel' below 👇").
+- visual_notes: 2-4 bullets on what to film, transitions, on-screen text, B-roll, lighting. Plain text, "• " prefix per bullet.
+
+Return ONLY a JSON object {ideas: [...]} matching the schema below. No commentary, no markdown, no code fence.
 
 JSON schema for the final response:
 {
@@ -113,8 +147,14 @@ JSON schema for the final response:
       "format": string,
       "rationale": string,
       "kind": "pattern" | "trend" | "competitor" | "seasonal",
-      "source_refs": { ... },  // free-form object, e.g. { "competitor_handle": "@x", "hashtag": "#y", "url": "https://..." }
-      "hard_date": string      // only for seasonal, ISO 8601 date
+      "source_refs": { ... },        // free-form object, e.g. { "competitor_handle": "@x", "hashtag": "#y", "url": "https://..." }
+      "hard_date": string,           // only for seasonal, ISO 8601 date
+      "script": string,              // beat-by-beat, with timestamps
+      "post_title": string,
+      "description": string,
+      "hashtags": [string, ...],     // no leading '#'
+      "cta": string,
+      "visual_notes": string
     }
   ]
 }

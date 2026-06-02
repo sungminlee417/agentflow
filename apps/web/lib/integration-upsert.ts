@@ -24,10 +24,17 @@ export type UpsertArgs = {
   expiresAt: string | null;
 };
 
+export type UpsertResult = {
+  error: string | null;
+  integrationId: string | null;
+  action: "created" | "updated";
+  handle: string | null;
+};
+
 export async function upsertIntegrationByAccount(
   supabase: SupabaseClient,
   args: UpsertArgs,
-): Promise<{ error: string | null; integrationId: string | null }> {
+): Promise<UpsertResult> {
   const now = new Date().toISOString();
   const baseFields = {
     user_id: args.userId,
@@ -59,7 +66,12 @@ export async function upsertIntegrationByAccount(
       .from("integrations")
       .update(baseFields)
       .eq("id", existing.id);
-    return { error: error?.message ?? null, integrationId: existing.id };
+    return {
+      error: error?.message ?? null,
+      integrationId: existing.id,
+      action: "updated",
+      handle: args.handle,
+    };
   }
 
   // 2. Fresh row.
@@ -83,5 +95,7 @@ export async function upsertIntegrationByAccount(
   return {
     error: error?.message ?? null,
     integrationId: inserted?.id ?? null,
+    action: "created",
+    handle: args.handle,
   };
 }

@@ -112,18 +112,21 @@ export async function GET(request: NextRequest) {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const { error } = await upsertIntegrationByAccount(supabase, {
-    userId: user.id,
-    domain: "github",
-    provider: "github",
-    providerAccountId: accountId,
-    handle,
-    displayName,
-    encryptedAccessToken: encrypt(tokenData.access_token),
-    encryptedRefreshToken: null,
-    scopes,
-    expiresAt: null,
-  });
+  const { error, action, handle: resolvedHandle } = await upsertIntegrationByAccount(
+    supabase,
+    {
+      userId: user.id,
+      domain: "github",
+      provider: "github",
+      providerAccountId: accountId,
+      handle,
+      displayName,
+      encryptedAccessToken: encrypt(tokenData.access_token),
+      encryptedRefreshToken: null,
+      scopes,
+      expiresAt: null,
+    },
+  );
 
   if (error) {
     return NextResponse.redirect(
@@ -134,8 +137,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const params = new URLSearchParams({ connected: "github", action });
+  if (resolvedHandle) params.set("handle", resolvedHandle);
   const response = NextResponse.redirect(
-    publicUrl(request, `/integrations?connected=github`),
+    publicUrl(request, `/integrations?${params.toString()}`),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;

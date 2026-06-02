@@ -225,12 +225,167 @@ function AccountCard({
   );
 }
 
-export function IntegrationsHub({
+export type ConnectResult = {
+  provider: string;
+  action: "created" | "updated";
+  handle: string | null;
+};
+
+function ConnectResultBanner({
+  result,
   providers,
 }: {
+  result: ConnectResult;
   providers: ProviderGroup[];
 }) {
+  const providerGroup = providers.find((p) => p.provider === result.provider);
+  const label = providerGroup?.label ?? result.provider;
+  const handleStr = result.handle ? `@${result.handle}` : "your account";
+  // "updated" + the provider already had >1 connected accounts means a
+  // genuine token refresh (reconnecting to update scopes). "updated"
+  // when the user has only this one account but TRIED to add another
+  // is the duplicate-account failure mode — same banner is good enough
+  // since we can't tell intent.
+  const accountsCount = providerGroup?.accounts.length ?? 0;
+  const isDuplicate = result.action === "updated" && accountsCount >= 1;
+
+  if (result.action === "created") {
+    return (
+      <div className="mb-6 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">
+        <strong>Connected {handleStr}.</strong> A new {label} account is now
+        available in Video Ideas.
+      </div>
+    );
+  }
+
+  if (isDuplicate && result.provider === "tiktok") {
+    return (
+      <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+        <p>
+          <strong>Already connected as {handleStr}.</strong> TikTok signed you in
+          with the same account you already have. TikTok doesn&apos;t offer an
+          in-app account picker, so to add a different account:
+        </p>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs">
+          <li>
+            Open{" "}
+            <a
+              href="https://www.tiktok.com/logout"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              tiktok.com/logout
+            </a>{" "}
+            in a new tab to sign out fully.
+          </li>
+          <li>
+            Sign in to TikTok as the account you want to add. An Incognito
+            window is the safest way to keep your sessions separate.
+          </li>
+          <li>Come back here and click Connect again.</li>
+        </ol>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-6 rounded-md border border-neutral-300 bg-neutral-50 px-4 py-3 text-sm text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+      <strong>Refreshed {handleStr}.</strong> Token updated for this {label}{" "}
+      account.
+    </div>
+  );
+}
+
+function PreConnectTikTokModal({
+  open,
+  onClose,
+  onContinue,
+  hasExistingAccounts,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onContinue: () => void;
+  hasExistingAccounts: boolean;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-950"
+      >
+        <h3 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+          Before connecting TikTok
+        </h3>
+        <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+          TikTok will connect whichever account is currently signed in on{" "}
+          <span className="font-medium">tiktok.com</span> in this browser. There
+          is no account picker.
+        </p>
+        {hasExistingAccounts && (
+          <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">
+            To add a <em>different</em> account from the one(s) you already
+            have, make sure that account is the one signed in on tiktok.com
+            right now. The easiest way is to use an Incognito / Private window
+            signed in only as that account.
+          </p>
+        )}
+        <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-neutral-500">
+          <li>
+            Open{" "}
+            <a
+              href="https://www.tiktok.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              tiktok.com
+            </a>{" "}
+            in a new tab. Confirm the avatar in the top-right matches the
+            account you want to connect.
+          </li>
+          <li>
+            If wrong, sign out and back in as the correct account (or use an
+            Incognito window).
+          </li>
+          <li>Return here and continue.</li>
+        </ol>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onContinue}
+            className="rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+          >
+            Continue to TikTok
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function IntegrationsHub({
+  providers,
+  connectResult,
+  errorParam,
+}: {
+  providers: ProviderGroup[];
+  connectResult?: ConnectResult | null;
+  errorParam?: string | null;
+}) {
   const [open, setOpen] = useState<string | null>(null);
+  const [tiktokModalOpen, setTiktokModalOpen] = useState(false);
 
   const codeProviders = providers.filter((i) => i.group === "code");
   const socialProviders = providers.filter((i) => i.group === "social");
@@ -244,9 +399,20 @@ export function IntegrationsHub({
         <p className="mt-1 text-sm text-neutral-500">
           Connect one or more accounts per platform. Each account can be
           renamed and used independently in Video Ideas. OAuth app credentials
-          and add-ons (Apify, uploads) live in each provider's modal.
+          and add-ons (Apify, uploads) live in each provider&apos;s modal.
         </p>
       </header>
+
+      {errorParam && (
+        <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+          <strong>Connection failed:</strong> {errorParam}
+        </div>
+      )}
+      {connectResult && !errorParam && (
+        <div className="mt-6">
+          <ConnectResultBanner result={connectResult} providers={providers} />
+        </div>
+      )}
 
       {codeProviders.length > 0 && (
         <section className="mt-10">
@@ -277,6 +443,19 @@ export function IntegrationsHub({
           </div>
         </section>
       )}
+
+      <PreConnectTikTokModal
+        open={tiktokModalOpen}
+        onClose={() => setTiktokModalOpen(false)}
+        onContinue={() => {
+          setTiktokModalOpen(false);
+          window.location.href = "/api/oauth/tiktok/start";
+        }}
+        hasExistingAccounts={
+          (providers.find((p) => p.provider === "tiktok")?.accounts.length ?? 0) >
+          0
+        }
+      />
 
       {providers.map((p) => (
         <Modal
@@ -311,7 +490,9 @@ export function IntegrationsHub({
               }
               description={
                 p.accounts.length > 0
-                  ? "To switch which account is connected, sign out of the current account in your browser first, then click Connect."
+                  ? p.provider === "tiktok"
+                    ? "TikTok has no account picker — you'll connect whichever account is currently signed in on tiktok.com. Click Connect to see a quick checklist."
+                    : "To switch which account is connected, sign out of the current account in your browser first, then click Connect."
                   : p.description
               }
               hint={p.hint}
@@ -319,6 +500,11 @@ export function IntegrationsHub({
               credentialsConfigured={p.credentialsConfigured}
               credentialsLast4={p.credentialsLast4}
               credentialsSource={p.credentialsSource}
+              onBeforeConnect={
+                p.provider === "tiktok"
+                  ? () => setTiktokModalOpen(true)
+                  : undefined
+              }
             />
 
             {p.group === "social" && p.uploadHint && (

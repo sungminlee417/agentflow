@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Modal } from "@/components/modal";
 
 export type VideoIdeaRow = {
   id: string;
@@ -17,6 +18,12 @@ export type VideoIdeaRow = {
   expires_at: string;
   status: "pending" | "scheduled" | "done" | "dismissed";
   created_at: string;
+  script: string | null;
+  post_title: string | null;
+  description: string | null;
+  hashtags: string[] | null;
+  cta: string | null;
+  visual_notes: string | null;
 };
 
 export type IdeasAccount = {
@@ -102,6 +109,11 @@ export function VideoIdeasList({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [savingTarget, setSavingTarget] = useState(false);
+  const [detailIdeaId, setDetailIdeaId] = useState<string | null>(null);
+  const detailIdea = useMemo(
+    () => ideas.find((i) => i.id === detailIdeaId) ?? null,
+    [ideas, detailIdeaId],
+  );
 
   const filtered = useMemo(() => {
     const list = ideas.filter((i) => i.status === "pending");
@@ -353,74 +365,293 @@ export function VideoIdeasList({
           </div>
         )}
 
-        {filtered.map((i) => (
-          <article
-            key={i.id}
-            className="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-950"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${KIND_COLORS[i.kind]}`}
-              >
-                {KIND_LABELS[i.kind]}
-              </span>
-              <span
-                className={`text-xs ${
-                  isUrgent(i.expires_at)
-                    ? "text-rose-600 dark:text-rose-400"
-                    : "text-neutral-500"
-                }`}
-              >
-                {expiresLabel(i.expires_at)}
-              </span>
-            </div>
-            <h3 className="mt-2 text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-              {i.title}
-            </h3>
-            {i.hook && (
-              <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">
-                <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
-                  Hook ·{" "}
+        {filtered.map((i) => {
+          const hasFullContent =
+            !!i.script || !!i.description || (i.hashtags?.length ?? 0) > 0;
+          return (
+            <article
+              key={i.id}
+              className="group rounded-lg border border-neutral-200 bg-white p-4 transition hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-950 dark:hover:border-neutral-700"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${KIND_COLORS[i.kind]}`}
+                >
+                  {KIND_LABELS[i.kind]}
                 </span>
-                {i.hook}
-              </p>
-            )}
-            {i.format && (
-              <p className="mt-1 text-xs text-neutral-500">Format: {i.format}</p>
-            )}
-            {i.rationale && (
-              <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
-                {i.rationale}
-              </p>
-            )}
-            <SourceRefs refs={i.source_refs} />
-            <div className="mt-3 flex flex-wrap gap-2">
+                <span
+                  className={`text-xs ${
+                    isUrgent(i.expires_at)
+                      ? "text-rose-600 dark:text-rose-400"
+                      : "text-neutral-500"
+                  }`}
+                >
+                  {expiresLabel(i.expires_at)}
+                </span>
+                {hasFullContent && (
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                    Upload-ready
+                  </span>
+                )}
+              </div>
               <button
                 type="button"
-                onClick={() => setStatus(i.id, "scheduled")}
-                className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                onClick={() => setDetailIdeaId(i.id)}
+                className="mt-2 text-left text-sm font-semibold text-neutral-900 hover:underline dark:text-neutral-100"
               >
-                Mark scheduled
+                {i.title}
               </button>
-              <button
-                type="button"
-                onClick={() => setStatus(i.id, "done")}
-                className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-              >
-                Done
-              </button>
-              <button
-                type="button"
-                onClick={() => remove(i.id)}
-                className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
-              >
-                Dismiss
-              </button>
-            </div>
-          </article>
-        ))}
+              {i.hook && (
+                <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">
+                  <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+                    Hook ·{" "}
+                  </span>
+                  {i.hook}
+                </p>
+              )}
+              {i.format && (
+                <p className="mt-1 text-xs text-neutral-500">
+                  Format: {i.format}
+                </p>
+              )}
+              {i.rationale && (
+                <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
+                  {i.rationale}
+                </p>
+              )}
+              <SourceRefs refs={i.source_refs} />
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDetailIdeaId(i.id)}
+                  className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+                >
+                  View details →
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatus(i.id, "scheduled")}
+                  className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                >
+                  Mark scheduled
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatus(i.id, "done")}
+                  className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                >
+                  Done
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remove(i.id)}
+                  className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </article>
+          );
+        })}
       </section>
+
+      {detailIdea && (
+        <IdeaDetailModal
+          idea={detailIdea}
+          onClose={() => setDetailIdeaId(null)}
+          onSchedule={() => {
+            setStatus(detailIdea.id, "scheduled");
+            setDetailIdeaId(null);
+          }}
+          onDone={() => {
+            setStatus(detailIdea.id, "done");
+            setDetailIdeaId(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function IdeaDetailModal({
+  idea,
+  onClose,
+  onSchedule,
+  onDone,
+}: {
+  idea: VideoIdeaRow;
+  onClose: () => void;
+  onSchedule: () => void;
+  onDone: () => void;
+}) {
+  const captionWithTags = useMemo(() => {
+    const body = [idea.post_title, idea.description]
+      .filter((x) => !!x)
+      .join("\n\n");
+    const tags = (idea.hashtags ?? []).map((h) => `#${h}`).join(" ");
+    return [body, tags].filter(Boolean).join("\n\n").trim();
+  }, [idea]);
+
+  return (
+    <Modal
+      open={true}
+      onClose={onClose}
+      title={idea.title}
+      subtitle={`${KIND_LABELS[idea.kind]} · ${expiresLabel(idea.expires_at)}`}
+      maxWidth="max-w-3xl"
+    >
+      <div className="space-y-5">
+        {idea.rationale && (
+          <p className="rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
+            <span className="font-medium text-neutral-700 dark:text-neutral-300">
+              Why this could work:
+            </span>{" "}
+            {idea.rationale}
+          </p>
+        )}
+
+        {idea.script ? (
+          <Section title="Script" textToCopy={idea.script}>
+            <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-neutral-50 px-3 py-3 text-xs text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+              {idea.script}
+            </pre>
+          </Section>
+        ) : idea.hook ? (
+          <Section title="Hook" textToCopy={idea.hook}>
+            <p className="rounded-md bg-neutral-50 px-3 py-3 text-sm text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+              {idea.hook}
+            </p>
+          </Section>
+        ) : null}
+
+        {(idea.post_title || idea.description) && (
+          <Section
+            title="Caption"
+            textToCopy={captionWithTags}
+            copyLabel="Copy caption + tags"
+          >
+            <div className="rounded-md bg-neutral-50 px-3 py-3 text-sm text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+              {idea.post_title && (
+                <p className="font-medium">{idea.post_title}</p>
+              )}
+              {idea.description && (
+                <p className="mt-2 whitespace-pre-wrap">{idea.description}</p>
+              )}
+              {idea.hashtags && idea.hashtags.length > 0 && (
+                <p className="mt-3 text-blue-700 dark:text-blue-300">
+                  {idea.hashtags.map((h) => `#${h}`).join(" ")}
+                </p>
+              )}
+            </div>
+          </Section>
+        )}
+
+        {idea.hashtags && idea.hashtags.length > 0 && (
+          <Section
+            title="Hashtags"
+            textToCopy={idea.hashtags.map((h) => `#${h}`).join(" ")}
+          >
+            <div className="flex flex-wrap gap-1.5">
+              {idea.hashtags.map((h) => (
+                <span
+                  key={h}
+                  className="rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+                >
+                  #{h}
+                </span>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {idea.cta && (
+          <Section title="Call to action" textToCopy={idea.cta}>
+            <p className="rounded-md bg-neutral-50 px-3 py-2 text-sm text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+              {idea.cta}
+            </p>
+          </Section>
+        )}
+
+        {idea.visual_notes && (
+          <Section title="Visual notes">
+            <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-neutral-50 px-3 py-3 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+              {idea.visual_notes}
+            </pre>
+          </Section>
+        )}
+
+        {idea.source_refs && Object.keys(idea.source_refs).length > 0 && (
+          <Section title="Source evidence">
+            <div className="text-[11px]">
+              <SourceRefs refs={idea.source_refs} />
+            </div>
+          </Section>
+        )}
+
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+          <button
+            type="button"
+            onClick={onSchedule}
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+          >
+            Mark scheduled
+          </button>
+          <button
+            type="button"
+            onClick={onDone}
+            className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+          >
+            Mark done
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function Section({
+  title,
+  children,
+  textToCopy,
+  copyLabel = "Copy",
+}: {
+  title: string;
+  children: React.ReactNode;
+  textToCopy?: string;
+  copyLabel?: string;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <h3 className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+          {title}
+        </h3>
+        {textToCopy && <CopyButton text={textToCopy} label={copyLabel} />}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-[11px] text-neutral-600 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800"
+    >
+      {copied ? "Copied ✓" : label}
+    </button>
   );
 }
 

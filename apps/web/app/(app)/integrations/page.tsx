@@ -72,7 +72,17 @@ const OAUTH_PROVIDERS: Array<{
   },
 ];
 
-export default async function IntegrationsPage() {
+export default async function IntegrationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    connected?: string;
+    action?: string;
+    handle?: string;
+    error?: string;
+  }>;
+}) {
+  const sp = await searchParams;
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -181,5 +191,19 @@ export default async function IntegrationsPage() {
     });
   }
 
-  return <IntegrationsHub providers={providers} />;
+  return (
+    <IntegrationsHub
+      providers={providers}
+      connectResult={
+        sp.connected
+          ? {
+              provider: sp.connected,
+              action: sp.action === "updated" ? "updated" : "created",
+              handle: sp.handle ?? null,
+            }
+          : null
+      }
+      errorParam={sp.error ?? null}
+    />
+  );
 }

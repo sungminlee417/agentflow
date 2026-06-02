@@ -102,6 +102,12 @@ export async function POST(request: NextRequest) {
     source_refs: idea.source_refs ?? {},
     expires_at: computeExpiresAt(idea).toISOString(),
     status: "pending",
+    script: idea.script ?? null,
+    post_title: idea.post_title ?? null,
+    description: idea.description ?? null,
+    hashtags: (idea.hashtags ?? []).map((h) => h.replace(/^#/, "")),
+    cta: idea.cta ?? null,
+    visual_notes: idea.visual_notes ?? null,
   }));
 
   if (rows.length > 0) {

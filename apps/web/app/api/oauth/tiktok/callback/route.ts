@@ -128,20 +128,23 @@ export async function GET(request: NextRequest) {
     ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
     : null;
 
-  const { error } = await upsertIntegrationByAccount(supabase, {
-    userId: user.id,
-    domain: "tiktok",
-    provider: "tiktok",
-    providerAccountId: accountId,
-    handle,
-    displayName,
-    encryptedAccessToken: encrypt(tokenData.access_token),
-    encryptedRefreshToken: tokenData.refresh_token
-      ? encrypt(tokenData.refresh_token)
-      : null,
-    scopes,
-    expiresAt,
-  });
+  const { error, action, handle: resolvedHandle } = await upsertIntegrationByAccount(
+    supabase,
+    {
+      userId: user.id,
+      domain: "tiktok",
+      provider: "tiktok",
+      providerAccountId: accountId,
+      handle,
+      displayName,
+      encryptedAccessToken: encrypt(tokenData.access_token),
+      encryptedRefreshToken: tokenData.refresh_token
+        ? encrypt(tokenData.refresh_token)
+        : null,
+      scopes,
+      expiresAt,
+    },
+  );
 
   if (error) {
     return NextResponse.redirect(
@@ -152,8 +155,13 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const params = new URLSearchParams({
+    connected: "tiktok",
+    action,
+  });
+  if (resolvedHandle) params.set("handle", resolvedHandle);
   const response = NextResponse.redirect(
-    publicUrl(request, `/integrations?connected=tiktok`),
+    publicUrl(request, `/integrations?${params.toString()}`),
   );
   response.cookies.delete(STATE_COOKIE);
   response.cookies.delete(VERIFIER_COOKIE);

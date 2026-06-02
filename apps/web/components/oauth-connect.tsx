@@ -28,6 +28,7 @@ export function OAuthConnect({
   credentialsConfigured,
   credentialsLast4,
   credentialsSource,
+  onBeforeConnect,
 }: {
   provider: string;
   label: string;
@@ -37,6 +38,9 @@ export function OAuthConnect({
   credentialsConfigured: boolean;
   credentialsLast4: string | null;
   credentialsSource: "user" | "env" | null;
+  /** If provided, runs instead of navigating directly. Use to show a
+   *  pre-connect explanation modal. */
+  onBeforeConnect?: () => void;
 }) {
   const router = useRouter();
   const [showCredsForm, setShowCredsForm] = useState(
@@ -107,9 +111,16 @@ export function OAuthConnect({
           )}
         </div>
         <a
-          href={canConnect ? `/api/oauth/${provider}/start` : undefined}
+          href={canConnect && !onBeforeConnect ? `/api/oauth/${provider}/start` : undefined}
           onClick={(e) => {
-            if (!canConnect) e.preventDefault();
+            if (!canConnect) {
+              e.preventDefault();
+              return;
+            }
+            if (onBeforeConnect) {
+              e.preventDefault();
+              onBeforeConnect();
+            }
           }}
           aria-disabled={!canConnect}
           className={`shrink-0 rounded-md px-4 py-2 text-sm font-medium transition ${

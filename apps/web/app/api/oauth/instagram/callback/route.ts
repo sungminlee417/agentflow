@@ -111,18 +111,21 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { error } = await upsertIntegrationByAccount(supabase, {
-    userId: user.id,
-    domain: "instagram",
-    provider: "instagram",
-    providerAccountId: accountId,
-    handle,
-    displayName: handle,
-    encryptedAccessToken: encrypt(finalToken),
-    encryptedRefreshToken: null,
-    scopes: shortData.permissions ?? [],
-    expiresAt,
-  });
+  const { error, action, handle: resolvedHandle } = await upsertIntegrationByAccount(
+    supabase,
+    {
+      userId: user.id,
+      domain: "instagram",
+      provider: "instagram",
+      providerAccountId: accountId,
+      handle,
+      displayName: handle,
+      encryptedAccessToken: encrypt(finalToken),
+      encryptedRefreshToken: null,
+      scopes: shortData.permissions ?? [],
+      expiresAt,
+    },
+  );
 
   if (error) {
     return NextResponse.redirect(
@@ -133,8 +136,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const params = new URLSearchParams({ connected: "instagram", action });
+  if (resolvedHandle) params.set("handle", resolvedHandle);
   const response = NextResponse.redirect(
-    publicUrl(request, `/integrations?connected=instagram`),
+    publicUrl(request, `/integrations?${params.toString()}`),
   );
   response.cookies.delete(STATE_COOKIE);
   return response;
