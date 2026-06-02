@@ -88,6 +88,68 @@ export function buildTikTokTools(token: string) {
       },
     }),
 
+    tiktok_top_my_videos: tool({
+      description:
+        "Surface the authenticated TikTok user's best-performing videos by engagement rate (likes ÷ views) across their recent history. Pages through up to `from_history` videos server-side, ranks them, returns the top `top_n`. Use this to find what's actually worked for the creator over time (versus tiktok_list_my_videos which only gives you the most recent chronological slice).",
+      inputSchema: z.object({
+        top_n: z.number().int().min(1).max(20).default(10),
+        from_history: z.number().int().min(20).max(200).default(100),
+      }),
+      execute: async ({ top_n, from_history }) => {
+        const pageSize = 20; // TikTok's per-call max
+        const collected: Array<Record<string, unknown>> = [];
+        let cursor: number | undefined;
+        let pages = 0;
+        // Safety cap: don't burn calls if has_more lies.
+        const maxPages = Math.ceil(from_history / pageSize) + 1;
+        while (collected.length < from_history && pages < maxPages) {
+          const body: Record<string, unknown> = { max_count: pageSize };
+          if (cursor != null) body.cursor = cursor;
+          const data = (await tt(token, "/video/list/", {
+            method: "POST",
+            query: { fields: VIDEO_FIELDS.join(",") },
+            body,
+          })) as {
+            data?: {
+              videos?: Array<Record<string, unknown>>;
+              cursor?: number;
+              has_more?: boolean;
+            };
+          };
+          const batch = data.data?.videos ?? [];
+          collected.push(...batch);
+          pages += 1;
+          if (!data.data?.has_more) break;
+          cursor = data.data.cursor;
+          if (cursor == null) break;
+        }
+
+        // Engagement rate with a minimum-views floor to avoid ranking
+        // a 5-view fluke at 100% above a 10k-view banger at 8%.
+        const VIEW_FLOOR = 50;
+        const ranked = collected
+          .map((v) => {
+            const views = Number(v.view_count ?? 0);
+            const likes = Number(v.like_count ?? 0);
+            const rate = views >= VIEW_FLOOR ? likes / views : 0;
+            return { v, views, likes, rate };
+          })
+          .filter((r) => r.views >= VIEW_FLOOR)
+          .sort((a, b) => b.rate - a.rate)
+          .slice(0, top_n)
+          .map((r) => ({
+            ...r.v,
+            _engagement_rate: Number(r.rate.toFixed(4)),
+          }));
+
+        return {
+          videos: ranked,
+          considered: collected.length,
+          ranked_by: "likes / views (with min 50 views)",
+        };
+      },
+    }),
+
     tiktok_query_videos: tool({
       description:
         "Look up specific TikTok videos by id, returning full stats + metadata. Use after tiktok_list_my_videos to enrich a subset.",

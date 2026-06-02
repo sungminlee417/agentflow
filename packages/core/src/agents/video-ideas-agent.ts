@@ -74,7 +74,7 @@ const IDEAS_ENVELOPE_SCHEMA = z.union([
 function describeAvailable(connected: string[]): string {
   const lines: string[] = [];
   lines.push(
-    "- TikTok (your account): tiktok_get_my_profile, tiktok_list_my_videos",
+    "- TikTok (your account): tiktok_get_my_profile, tiktok_list_my_videos, tiktok_top_my_videos",
   );
   if (connected.includes("apify")) {
     lines.push(
@@ -102,12 +102,14 @@ Available tools:
 ${describeAvailable(connected)}
 
 Required procedure:
-1. tiktok_list_my_videos (max_count 20). Identify the creator's winning format(s): which structures + hooks correlate with the highest engagement rate (likes ÷ views).
-2. Extract the user's most-used hashtags from their top videos.
-${hasApify ? `3. For each of the top 2-3 hashtags, tiktok_search_hashtag (limit 15). From the results: (a) note what's trending right now, (b) collect 3-5 distinct authors (NOT the user) who consistently post in this niche — these are auto-discovered competitors.
-4. For 1-2 of those competitor handles, tiktok_get_profile (videos_limit 10) to surface songs/formats they covered well that the user hasn't.
-5. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.` : `3. Skip Apify-backed competitor + trend discovery (not configured). Lean harder on pattern + seasonal kinds.
-4. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.`}
+1. tiktok_top_my_videos (top_n 10, from_history 100) — these are the creator's lifetime best by engagement rate (likes ÷ views), pulled across their last ~100 uploads. This tells you what their audience actually rewards, not just what they posted recently.
+2. tiktok_list_my_videos (max_count 20) — most recent 20 uploads. This tells you the creator's CURRENT voice / pacing / topic focus, even if recent videos haven't all popped. Match scripts to this voice.
+3. Cross-reference: the patterns in the top 10 are what works for this audience; the recent 20 is how this creator currently sounds. Your ideas should hit the top-10 patterns delivered in the recent-20 voice.
+4. Extract the creator's most-used hashtags from the top performers.
+${hasApify ? `5. For each of the top 2-3 hashtags, tiktok_search_hashtag (limit 15). From the results: (a) note what's trending right now, (b) collect 3-5 distinct authors (NOT the user) who consistently post in this niche — these are auto-discovered competitors.
+6. For 1-2 of those competitor handles, tiktok_get_profile (videos_limit 10) to surface songs/formats they covered well that the user hasn't.
+7. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.` : `5. Skip Apify-backed competitor + trend discovery (not configured). Lean harder on pattern + seasonal kinds.
+6. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.`}
 
 Now produce exactly ${count} ideas, balanced across these kinds based on what's available:
 - "pattern": extrapolated from the user's own winning format. Suggest a specific NEW song / topic / target they haven't covered that fits the pattern.
