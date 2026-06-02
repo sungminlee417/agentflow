@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useConfirm } from "@/components/confirm-dialog";
 
 // OAuth credentials form + Connect button. Each user supplies their own
 // OAuth app's client_id + client_secret per provider — server env vars
@@ -43,6 +44,7 @@ export function OAuthConnect({
   onBeforeConnect?: () => void;
 }) {
   const router = useRouter();
+  const { confirm, dialog } = useConfirm();
   const [showCredsForm, setShowCredsForm] = useState(
     !credentialsConfigured && !hasExistingAccounts,
   );
@@ -85,12 +87,13 @@ export function OAuthConnect({
   }
 
   async function deleteCredentials() {
-    if (
-      !confirm(
-        `Remove your saved ${label} OAuth app credentials? Existing connections still work until you disconnect them.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: `Remove your saved ${label} OAuth app credentials?`,
+      description:
+        "Existing connections keep working until you disconnect them.",
+      confirmLabel: "Remove",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/oauth-credentials?provider=${provider}`, {
       method: "DELETE",
     });
@@ -227,6 +230,7 @@ export function OAuthConnect({
           </form>
         )}
       </div>
+      {dialog}
     </div>
   );
 }

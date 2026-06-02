@@ -12,6 +12,7 @@ import {
   type AutomationTypeMeta,
 } from "@agentflow/core";
 import { Markdown } from "@/components/markdown";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export type AutomationRow = {
   id: string;
@@ -57,6 +58,7 @@ export function AutomationsSection({
   connectedProviders: string[];
 }) {
   const router = useRouter();
+  const { confirm, dialog } = useConfirm();
   const [selectedType, setSelectedType] = useState<AutomationKind>(
     availableTypes[0] ?? "github_issue_to_pr",
   );
@@ -146,17 +148,27 @@ export function AutomationsSection({
   }
 
   async function deleteAutomation(id: string) {
-    if (!confirm("Delete this automation? Run history is also deleted.")) return;
+    const ok = await confirm({
+      title: "Delete this automation?",
+      description: "Run history is also deleted.",
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/automations?id=${id}`, { method: "DELETE" });
     if (res.ok) router.refresh();
   }
 
   async function deleteRun(id: string, status: AutomationRunRow["status"]) {
-    const confirmMsg =
+    const description =
       status === "running"
-        ? "This run still shows as running. Delete it anyway? Usually fine for stuck runs."
-        : "Delete this run? The next worker tick will retry.";
-    if (!confirm(confirmMsg)) return;
+        ? "This run still shows as running. Usually fine for stuck runs."
+        : "The next worker tick will retry.";
+    const ok = await confirm({
+      title: "Delete this run?",
+      description,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/automation-runs?id=${id}`, {
       method: "DELETE",
     });
@@ -389,6 +401,7 @@ export function AutomationsSection({
       {error && (
         <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>
       )}
+      {dialog}
     </section>
   );
 }

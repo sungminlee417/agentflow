@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export function ServiceKeyForm({
   service,
@@ -19,6 +20,7 @@ export function ServiceKeyForm({
   existingLast4: string | null;
 }) {
   const router = useRouter();
+  const { confirm, dialog } = useConfirm();
   const [value, setValue] = useState("");
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">(
     "idle",
@@ -47,7 +49,12 @@ export function ServiceKeyForm({
 
   async function remove() {
     if (!existingLast4) return;
-    if (!confirm(`Remove your ${label} key?`)) return;
+    const ok = await confirm({
+      title: `Remove your ${label} key?`,
+      description: "You can paste a new one any time.",
+      confirmLabel: "Remove",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/service-keys?service=${service}`, {
       method: "DELETE",
     });
@@ -112,6 +119,7 @@ export function ServiceKeyForm({
       {error && (
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>
       )}
+      {dialog}
     </form>
   );
 }

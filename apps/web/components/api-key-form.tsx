@@ -8,6 +8,7 @@ import {
   type ProviderName,
   type ModelOption,
 } from "@agentflow/core";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export function ApiKeyForm({
   provider,
@@ -23,6 +24,7 @@ export function ApiKeyForm({
   existingModel: string | null;
 }) {
   const router = useRouter();
+  const { confirm, dialog } = useConfirm();
   const [value, setValue] = useState("");
   const [model, setModel] = useState<string>(
     existingModel ?? DEFAULT_MODELS[provider],
@@ -104,7 +106,12 @@ export function ApiKeyForm({
 
   async function remove() {
     if (!existingLast4) return;
-    if (!confirm(`Remove your ${label} key?`)) return;
+    const ok = await confirm({
+      title: `Remove your ${label} key?`,
+      description: "You can paste a new one any time.",
+      confirmLabel: "Remove",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/api-keys?provider=${provider}`, {
       method: "DELETE",
     });
@@ -211,6 +218,7 @@ export function ApiKeyForm({
       {error && (
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>
       )}
+      {dialog}
     </form>
   );
 }

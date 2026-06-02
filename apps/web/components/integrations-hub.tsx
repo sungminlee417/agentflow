@@ -6,6 +6,7 @@ import { Modal } from "@/components/modal";
 import { OAuthConnect } from "@/components/oauth-connect";
 import { ServiceKeyForm } from "@/components/service-key-form";
 import { AnalyticsUpload, type UploadRow } from "@/components/analytics-upload";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export type IntegrationAddon = {
   service: "apify";
@@ -134,6 +135,7 @@ function AccountCard({
   const [editingLabel, setEditingLabel] = useState(false);
   const [label, setLabel] = useState(account.accountLabel ?? "");
   const [working, setWorking] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   async function saveLabel() {
     setWorking(true);
@@ -150,10 +152,13 @@ function AccountCard({
   }
 
   async function disconnect() {
-    if (
-      !confirm(`Disconnect ${accountTitle(account)}? The agent will lose access.`)
-    )
-      return;
+    const ok = await confirm({
+      title: `Disconnect ${accountTitle(account)}?`,
+      description:
+        "The agent will lose access to this account. Video ideas linked to it stay until they expire.",
+      confirmLabel: "Disconnect",
+    });
+    if (!ok) return;
     setWorking(true);
     const res = await fetch(
       `/api/oauth/${provider}/disconnect?integration_id=${account.id}`,
@@ -216,11 +221,12 @@ function AccountCard({
           type="button"
           onClick={disconnect}
           disabled={working}
-          className="shrink-0 text-xs text-neutral-500 transition hover:text-red-500 disabled:opacity-50 dark:text-neutral-400 dark:hover:text-red-400"
+          className="shrink-0 rounded text-xs text-neutral-500 transition hover:text-red-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:opacity-50 dark:text-neutral-400 dark:hover:text-red-400"
         >
           Disconnect
         </button>
       </div>
+      {dialog}
     </div>
   );
 }

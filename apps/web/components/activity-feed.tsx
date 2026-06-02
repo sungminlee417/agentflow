@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { managerForAutomationType, isSocialBrief } from "@agentflow/core";
 import { Markdown } from "@/components/markdown";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export type RunRow = {
   id: string;
@@ -98,6 +99,7 @@ export function ActivityFeed({
   automations: AutomationSummary[];
 }) {
   const [runs, setRuns] = useState<RunRow[]>(initialRuns);
+  const { confirm, dialog } = useConfirm();
   // Tick once a second so "Running 23s" / "5m ago" labels stay fresh.
   const [, setTick] = useState(0);
 
@@ -144,11 +146,16 @@ export function ActivityFeed({
   }, []);
 
   async function deleteRun(id: string, status: RunRow["status"]) {
-    const confirmMsg =
+    const description =
       status === "running"
-        ? "This run still shows as running. Delete it anyway? If the worker is genuinely still working, its update will silently fail — usually fine for stuck runs."
-        : "Delete this run? The next worker tick will retry the issue.";
-    if (!confirm(confirmMsg)) return;
+        ? "This run still shows as running. If the worker is genuinely still working, its update will silently fail — usually fine for stuck runs."
+        : "The next worker tick will retry the underlying issue.";
+    const ok = await confirm({
+      title: "Delete this run?",
+      description,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     // Optimistic remove; Realtime DELETE event will also fire.
     setRuns((prev) => prev.filter((r) => r.id !== id));
     const res = await fetch(`/api/automation-runs?id=${id}`, {
@@ -323,6 +330,7 @@ export function ActivityFeed({
           </ul>
         )}
       </div>
+      {dialog}
     </div>
   );
 }

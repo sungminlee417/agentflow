@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export type UploadRow = {
   id: string;
@@ -31,6 +32,7 @@ export function AnalyticsUpload({
   uploads: UploadRow[];
 }) {
   const router = useRouter();
+  const { confirm, dialog } = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +62,12 @@ export function AnalyticsUpload({
   }
 
   async function removeUpload(id: string) {
-    if (!confirm("Delete this upload?")) return;
+    const ok = await confirm({
+      title: "Delete this upload?",
+      description: "The agent will no longer have this data to draw from.",
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/uploads/creator-analytics?id=${id}`, {
       method: "DELETE",
     });
@@ -130,6 +137,7 @@ export function AnalyticsUpload({
           ))}
         </ul>
       )}
+      {dialog}
     </div>
   );
 }
