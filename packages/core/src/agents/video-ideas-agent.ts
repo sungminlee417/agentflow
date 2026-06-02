@@ -1,0 +1,251 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { generateText, stepCountIs } from "ai";
+import { z } from "zod";
+import { decrypt } from "../crypto";
+import { getModel, isProvider } from "../ai-providers";
+import { buildToolsForUser } from "../tools";
+
+// Generates a balanced batch of fresh video ideas across four "kinds":
+//   • pattern    — extrapolated from the user's own top performers
+//   • competitor — a song/format a niche peer hit with, that the user
+//                  hasn't covered
+//   • trend      — a hashtag or sound currently trending in the niche
+//   • seasonal   — calendar-anchored idea (holiday, anniversary)
+//
+// The agent calls its own tools (the same set as the chat agent) to
+// gather evidence, then returns a JSON array of ideas. The caller
+// (refresh API) decides expires_at per kind and inserts to DB.
+
+export type VideoIdeaKind = "pattern" | "trend" | "competitor" | "seasonal";
+
+export type GeneratedIdea = {
+  title: string;
+  hook?: string;
+  format?: string;
+  rationale?: string;
+  kind: VideoIdeaKind;
+  source_refs?: Record<string, unknown>;
+  /** Only meaningful for seasonal — a hard date the idea should ship by. */
+  hard_date?: string;
+};
+
+export type VideoIdeasResult = {
+  ok: boolean;
+  ideas?: GeneratedIdea[];
+  tokens?: number;
+  error?: string;
+};
+
+const IDEA_JSON_SCHEMA = z.object({
+  ideas: z.array(
+    z.object({
+      title: z.string(),
+      hook: z.string().optional(),
+      format: z.string().optional(),
+      rationale: z.string().optional(),
+      kind: z.enum(["pattern", "trend", "competitor", "seasonal"]),
+      source_refs: z.record(z.string(), z.unknown()).optional(),
+      hard_date: z.string().optional(),
+    }),
+  ),
+});
+
+function describeAvailable(connected: string[]): string {
+  const lines: string[] = [];
+  lines.push(
+    "- TikTok (your account): tiktok_get_my_profile, tiktok_list_my_videos",
+  );
+  if (connected.includes("apify")) {
+    lines.push(
+      "- Niche/competitor (Apify): tiktok_search_hashtag, tiktok_search_keyword, tiktok_get_profile",
+    );
+  }
+  if (connected.includes("transcription")) {
+    lines.push(
+      "- Transcription: tiktok_transcribe_video — use sparingly to extract the EXACT hook from a top competitor video before deriving a competitor-kind idea.",
+    );
+  }
+  lines.push(
+    "- Uploaded analytics: list_my_analytics_uploads, get_analytics_upload",
+  );
+  return lines.join("\n");
+}
+
+function tiktokPrompt(count: number, today: string, connected: string[]): string {
+  const hasApify = connected.includes("apify");
+  return `You are a TikTok content strategist. Produce exactly ${count} fresh video ideas as a JSON object.
+
+Today is ${today}.
+
+Available tools:
+${describeAvailable(connected)}
+
+Required procedure:
+1. tiktok_list_my_videos (max_count 20). Identify the creator's winning format(s): which structures + hooks correlate with the highest engagement rate (likes ÷ views).
+2. Extract the user's most-used hashtags from their top videos.
+${hasApify ? `3. For each of the top 2-3 hashtags, tiktok_search_hashtag (limit 15). From the results: (a) note what's trending right now, (b) collect 3-5 distinct authors (NOT the user) who consistently post in this niche — these are auto-discovered competitors.
+4. For 1-2 of those competitor handles, tiktok_get_profile (videos_limit 10) to surface songs/formats they covered well that the user hasn't.
+5. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.` : `3. Skip Apify-backed competitor + trend discovery (not configured). Lean harder on pattern + seasonal kinds.
+4. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.`}
+
+Now produce exactly ${count} ideas, balanced across these kinds based on what's available:
+- "pattern": extrapolated from the user's own winning format. Suggest a specific NEW song / topic / target they haven't covered that fits the pattern.
+- ${hasApify ? `"competitor": cite the competitor handle in source_refs ({competitor_handle: "...", competitor_video_url: "..."}). The idea must be something they nailed that the user hasn't.` : `"competitor": skip — no competitor data available without Apify.`}
+- ${hasApify ? `"trend": cite the hashtag and/or trending sound in source_refs. Trends die fast — only include if you have direct evidence from tool calls.` : `"trend": skip — no trend data available without Apify.`}
+- "seasonal": calendar-anchored — a holiday, anniversary of a famous piece, a known meme day. Include hard_date (ISO 8601) for when the idea should ship by. Today is ${today}; only suggest hard_dates in the next 60 days.
+
+Critical:
+- Every idea MUST be grounded in something you actually saw in a tool result. No invented stats, no invented competitor handles, no invented trending hashtags.
+- Each title must be specific and recordable — "Cover Hotel California — acoustic vs classical" not "do another comparison video".
+- hook must be the actual first spoken/shown line.
+- format should be short ("acoustic vs classical comparison", "solo performance with text overlay").
+- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").
+- Return ONLY a JSON object {ideas: [...]} matching the schema. No commentary, no markdown, no code fence.`;
+}
+
+export async function runVideoIdeasAgent({
+  supabase,
+  userId,
+  count,
+  provider = "tiktok",
+  onStep,
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  count: number;
+  provider?: "tiktok";
+  onStep?: (s: { count: number; description: string }) => Promise<void> | void;
+}): Promise<VideoIdeasResult> {
+  if (provider !== "tiktok") {
+    return { ok: false, error: `Unsupported provider: ${provider}` };
+  }
+  if (count <= 0) {
+    return { ok: true, ideas: [] };
+  }
+
+  const { data: keys } = await supabase
+    .from("user_api_keys")
+    .select("provider, encrypted_key, model")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (!keys || keys.length === 0) {
+    return { ok: false, error: "No AI provider key configured." };
+  }
+  const { provider: aiProvider, encrypted_key, model: userModel } = keys[0]!;
+  if (!isProvider(aiProvider)) {
+    return { ok: false, error: `Unknown AI provider: ${aiProvider}` };
+  }
+
+  let apiKey: string;
+  try {
+    apiKey = decrypt(encrypted_key);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Could not decrypt API key: ${err instanceof Error ? err.message : "unknown"}`,
+    };
+  }
+
+  const { tools, connected } = await buildToolsForUser(supabase, userId);
+  if (!connected.includes("tiktok")) {
+    return { ok: false, error: "TikTok integration not connected." };
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const system = tiktokPrompt(count, today, connected);
+
+  let stepCount = 0;
+  try {
+    const result = await generateText({
+      model: getModel(aiProvider, apiKey, userModel),
+      system,
+      providerOptions:
+        aiProvider === "anthropic"
+          ? { anthropic: { cacheControl: { type: "ephemeral" } } }
+          : undefined,
+      messages: [
+        {
+          role: "user",
+          content: `Produce ${count} fresh TikTok video ideas now.`,
+        },
+      ],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tools: tools as any,
+      stopWhen: stepCountIs(25),
+      onStepFinish: async (step) => {
+        stepCount += 1;
+        if (onStep) {
+          try {
+            await onStep({ count: stepCount, description: describeStep(step) });
+          } catch (err) {
+            console.error("onStep failed:", err);
+          }
+        }
+      },
+    });
+
+    const parsed = parseIdeas(result.text);
+    if (!parsed) {
+      return {
+        ok: false,
+        error: "Agent did not return valid JSON ideas.",
+        tokens: result.usage?.totalTokens ?? undefined,
+      };
+    }
+
+    return {
+      ok: true,
+      ideas: parsed.slice(0, count),
+      tokens: result.usage?.totalTokens ?? undefined,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function parseIdeas(text: string): GeneratedIdea[] | null {
+  // Strip a code fence if the model wrapped its output despite the
+  // instruction not to.
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  try {
+    const json = JSON.parse(cleaned);
+    const result = IDEA_JSON_SCHEMA.safeParse(json);
+    if (!result.success) return null;
+    return result.data.ideas;
+  } catch {
+    return null;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function describeStep(step: any): string {
+  const toolCalls = step?.toolCalls ?? [];
+  if (toolCalls.length === 0) return "Generating ideas";
+  const last = toolCalls[toolCalls.length - 1];
+  return `Calling ${String(last?.toolName ?? "tool")}`;
+}
+
+// Map kind → days until expiry. Seasonal uses hard_date instead.
+export const KIND_TTL_DAYS: Record<VideoIdeaKind, number> = {
+  pattern: 30,
+  competitor: 14,
+  trend: 7,
+  seasonal: 60, // fallback if hard_date is missing
+};
+
+export function computeExpiresAt(idea: GeneratedIdea, now = new Date()): Date {
+  if (idea.kind === "seasonal" && idea.hard_date) {
+    const d = new Date(idea.hard_date);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  const days = KIND_TTL_DAYS[idea.kind];
+  return new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+}

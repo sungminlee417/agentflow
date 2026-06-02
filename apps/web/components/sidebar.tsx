@@ -56,6 +56,13 @@ export function Sidebar({
         >
           Activity
         </Link>
+        <Link
+          href="/video-ideas"
+          onClick={onClose}
+          className={topLinkClass("/video-ideas")}
+        >
+          Video ideas
+        </Link>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">

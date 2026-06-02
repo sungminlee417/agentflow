@@ -16,3 +16,4 @@ export * from "./tools/uploads";
 export * from "./agents/issue-agent";
 export * from "./agents/social-brief-agent";
 export * from "./agents/social-scripts-agent";
+export * from "./agents/video-ideas-agent";
