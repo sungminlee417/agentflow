@@ -130,6 +130,11 @@ function describeAvailableTools(connected: string[]): string {
       "- Apify-backed niche/competitor: tiktok_search_hashtag, tiktok_search_keyword, tiktok_get_profile",
     );
   }
+  if (connected.includes("transcription")) {
+    lines.push(
+      "- Video transcription: tiktok_transcribe_video — pull the actual spoken script of any TikTok URL. Use sparingly (each call ~$0.003); transcribe the top 2-3 best-performing examples to extract their EXACT hooks and pacing patterns before writing your own scripts.",
+    );
+  }
   lines.push(
     "- Uploaded analytics: list_my_analytics_uploads, get_analytics_upload — read these for retention curves, traffic sources, demographics not available in any API.",
   );

@@ -6,10 +6,11 @@ import { buildTikTokTools } from "./tiktok";
 import { buildInstagramTools } from "./instagram";
 import { buildApifyTikTokTools, loadApifyKey } from "./apify-tiktok";
 import { buildUploadsTools } from "./uploads";
+import { buildTranscriptionTools, loadOpenAIKey } from "./transcription";
 
 // Compose the agent's tool set from the user's connected integrations
-// and any optional service keys (Apify, etc.) plus their analytics
-// uploads. Anything not configured simply isn't exposed.
+// + service keys + analytics uploads. Anything not configured simply
+// isn't exposed to the model.
 
 export async function buildToolsForUser(
   supabase: SupabaseClient,
@@ -59,6 +60,14 @@ export async function buildToolsForUser(
   if (apifyToken) {
     Object.assign(tools, buildApifyTikTokTools(apifyToken));
     connected.push("apify");
+  }
+
+  // Transcription tool — needs Apify (for video URL) + OpenAI key (for
+  // Whisper). Surfaced as one tool the agent can call on any TikTok URL.
+  const openaiKey = await loadOpenAIKey(supabase, userId);
+  if (apifyToken && openaiKey) {
+    Object.assign(tools, buildTranscriptionTools(apifyToken, openaiKey));
+    connected.push("transcription");
   }
 
   // Uploaded analytics exports — always available; reads from DB.

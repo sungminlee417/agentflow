@@ -10,6 +10,7 @@ export * from "./tools/youtube";
 export * from "./tools/tiktok";
 export * from "./tools/instagram";
 export * from "./tools/apify-tiktok";
+export * from "./tools/transcription";
 export * from "./tools/uploads";
 export * from "./agents/issue-agent";
 export * from "./agents/social-brief-agent";

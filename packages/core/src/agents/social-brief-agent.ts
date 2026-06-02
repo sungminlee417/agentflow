@@ -40,6 +40,11 @@ function describeAvailableTools(connected: string[]): string {
       "Apify-backed niche/competitor: tiktok_search_hashtag, tiktok_search_keyword, tiktok_get_profile",
     );
   }
+  if (connected.includes("transcription")) {
+    tools.push(
+      "Video transcription: tiktok_transcribe_video — pull the actual spoken script of any TikTok video. Best used on top performers to extract their exact hook + pacing patterns.",
+    );
+  }
   tools.push(
     "Uploaded analytics: list_my_analytics_uploads + get_analytics_upload — call these FIRST when discussing retention, traffic sources, or audience demographics, since these are not in any platform API.",
   );
