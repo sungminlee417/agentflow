@@ -36,19 +36,21 @@ export type VideoIdeasResult = {
   error?: string;
 };
 
-const IDEA_JSON_SCHEMA = z.object({
-  ideas: z.array(
-    z.object({
-      title: z.string(),
-      hook: z.string().optional(),
-      format: z.string().optional(),
-      rationale: z.string().optional(),
-      kind: z.enum(["pattern", "trend", "competitor", "seasonal"]),
-      source_refs: z.record(z.string(), z.unknown()).optional(),
-      hard_date: z.string().optional(),
-    }),
-  ),
+const IDEA_SCHEMA = z.object({
+  title: z.string(),
+  hook: z.string().nullish(),
+  format: z.string().nullish(),
+  rationale: z.string().nullish(),
+  kind: z.enum(["pattern", "trend", "competitor", "seasonal"]),
+  source_refs: z.record(z.string(), z.unknown()).nullish(),
+  hard_date: z.string().nullish(),
 });
+
+// Accept either { ideas: [...] } or a bare [...].
+const IDEAS_ENVELOPE_SCHEMA = z.union([
+  z.object({ ideas: z.array(IDEA_SCHEMA) }),
+  z.array(IDEA_SCHEMA),
+]);
 
 function describeAvailable(connected: string[]): string {
   const lines: string[] = [];
@@ -100,7 +102,24 @@ Critical:
 - hook must be the actual first spoken/shown line.
 - format should be short ("acoustic vs classical comparison", "solo performance with text overlay").
 - rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").
-- Return ONLY a JSON object {ideas: [...]} matching the schema. No commentary, no markdown, no code fence.`;
+- Return ONLY a JSON object {ideas: [...]} matching the schema. No commentary, no markdown, no code fence.
+
+JSON schema for the final response:
+{
+  "ideas": [
+    {
+      "title": string,
+      "hook": string,
+      "format": string,
+      "rationale": string,
+      "kind": "pattern" | "trend" | "competitor" | "seasonal",
+      "source_refs": { ... },  // free-form object, e.g. { "competitor_handle": "@x", "hashtag": "#y", "url": "https://..." }
+      "hard_date": string      // only for seasonal, ISO 8601 date
+    }
+  ]
+}
+
+Your VERY LAST message must be this JSON and nothing else. Do not say "Here are the ideas:" or wrap in \`\`\`.`;
 }
 
 export async function runVideoIdeasAgent({
@@ -187,16 +206,18 @@ export async function runVideoIdeasAgent({
 
     const parsed = parseIdeas(result.text);
     if (!parsed) {
+      const preview = result.text.slice(0, 500).replace(/\s+/g, " ");
+      console.error("[video-ideas-agent] could not parse ideas. raw:", preview);
       return {
         ok: false,
-        error: "Agent did not return valid JSON ideas.",
+        error: `Agent did not return valid JSON ideas. Preview: ${preview}`,
         tokens: result.usage?.totalTokens ?? undefined,
       };
     }
 
     return {
       ok: true,
-      ideas: parsed.slice(0, count),
+      ideas: parsed.slice(0, count) as GeneratedIdea[],
       tokens: result.usage?.totalTokens ?? undefined,
     };
   } catch (err) {
@@ -208,21 +229,76 @@ export async function runVideoIdeasAgent({
 }
 
 function parseIdeas(text: string): GeneratedIdea[] | null {
-  // Strip a code fence if the model wrapped its output despite the
-  // instruction not to.
-  const cleaned = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-  try {
-    const json = JSON.parse(cleaned);
-    const result = IDEA_JSON_SCHEMA.safeParse(json);
-    if (!result.success) return null;
-    return result.data.ideas;
-  } catch {
-    return null;
+  // Try (in order): the whole text, fenced JSON extracted from a code
+  // block, the first balanced {...} substring, the first balanced [...]
+  // substring. Models sometimes prepend prose ("Here are the ideas:")
+  // or wrap output in a code fence despite instructions.
+  const candidates = collectJsonCandidates(text);
+  for (const candidate of candidates) {
+    try {
+      const json = JSON.parse(candidate);
+      const result = IDEAS_ENVELOPE_SCHEMA.safeParse(json);
+      if (!result.success) continue;
+      const ideas = Array.isArray(result.data) ? result.data : result.data.ideas;
+      return ideas as GeneratedIdea[];
+    } catch {
+      // try the next candidate
+    }
   }
+  return null;
+}
+
+function collectJsonCandidates(text: string): string[] {
+  const out: string[] = [];
+  const trimmed = text.trim();
+  out.push(trimmed);
+
+  // Fenced ```json ... ``` blocks
+  const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = fenceRe.exec(trimmed)) !== null) {
+    if (m[1]) out.push(m[1].trim());
+  }
+
+  // First balanced object
+  const obj = extractBalanced(trimmed, "{", "}");
+  if (obj) out.push(obj);
+  // First balanced array
+  const arr = extractBalanced(trimmed, "[", "]");
+  if (arr) out.push(arr);
+
+  return out;
+}
+
+function extractBalanced(s: string, open: string, close: string): string | null {
+  const start = s.indexOf(open);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i += 1) {
+    const c = s[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (c === "\\") {
+        escape = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === open) depth += 1;
+    else if (c === close) {
+      depth -= 1;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
