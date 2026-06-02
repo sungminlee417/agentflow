@@ -1,0 +1,239 @@
+import { tool } from "ai";
+import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { computeExpiresAt, type VideoIdeaKind } from "../agents/video-ideas-agent";
+
+// Video-ideas CRUD tools for the chat agent.
+//
+// These let the chat directly read, create, edit, and curate the
+// user's video-ideas library. Use case examples:
+//   • "What do I have in my video ideas list?" — list
+//   • "Show me the Hotel California one" — list + get
+//   • "Rewrite the hook for that to be more provocative" — update
+//   • "Add 3 new ideas in the same format as my top performers" —
+//     fetch evidence with the tiktok_* tools, then create N rows
+//   • "Mark all the Bach ones as scheduled" — list + set_status
+//   • "Delete the off-niche ones" — list + delete
+//
+// All tools are scoped to the chatting user via RLS-like manual
+// filtering on user_id, which double-protects on top of the RLS
+// policies already on video_ideas. integration_id is required for
+// create + list — it identifies which connected account the ideas
+// belong to.
+
+const KIND = z.enum(["pattern", "trend", "competitor", "seasonal"]);
+const STATUS = z.enum(["pending", "scheduled", "done", "dismissed"]);
+
+function normalizeHashtags(tags: string[] | null | undefined): string[] {
+  return (tags ?? []).map((h) => h.replace(/^#/, "").trim()).filter(Boolean);
+}
+
+export function buildVideoIdeasTools(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  return {
+    video_ideas_list_accounts: tool({
+      description:
+        "List the user's connected social-media accounts that can hold video ideas. Returns each account's id (use as `integration_id` in the other tools), provider (tiktok / youtube / instagram), and a human-readable name. Call this first if you need to know which account to act on.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { data } = await supabase
+          .from("integrations")
+          .select("id, provider, handle, display_name, account_label")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: true });
+        return (data ?? []).map((i) => ({
+          id: i.id as string,
+          provider: i.provider as string,
+          name:
+            (i.account_label as string | null) ||
+            (i.display_name as string | null) ||
+            (i.handle as string | null) ||
+            "Account",
+        }));
+      },
+    }),
+
+    video_ideas_list: tool({
+      description:
+        "List the user's video ideas for a specific connected account. Defaults to status='pending'. Filter by kind ('pattern' | 'trend' | 'competitor' | 'seasonal') if you need a subset. Returns id, kind, status, title, hook (short preview), format, expires_at — call video_ideas_get for full content of one.",
+      inputSchema: z.object({
+        integration_id: z
+          .string()
+          .uuid()
+          .describe("From video_ideas_list_accounts."),
+        status: STATUS.default("pending"),
+        kind: KIND.optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+      }),
+      execute: async ({ integration_id, status, kind, limit }) => {
+        let query = supabase
+          .from("video_ideas")
+          .select(
+            "id, kind, status, title, hook, format, expires_at, created_at",
+          )
+          .eq("user_id", userId)
+          .eq("integration_id", integration_id)
+          .eq("status", status)
+          .order("created_at", { ascending: false })
+          .limit(limit);
+        if (kind) query = query.eq("kind", kind);
+        const { data } = await query;
+        return data ?? [];
+      },
+    }),
+
+    video_ideas_get: tool({
+      description:
+        "Get the full content of a single video idea by id — title, hook, format, rationale, full script (with shot-by-shot SAY/ACTION/ON-SCREEN TEXT cues), post_title, description, hashtags, cta, visual_notes, source_refs. Use after video_ideas_list to inspect or edit one specifically.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+      execute: async ({ id }) => {
+        const { data } = await supabase
+          .from("video_ideas")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("id", id)
+          .maybeSingle();
+        return data;
+      },
+    }),
+
+    video_ideas_create: tool({
+      description:
+        "Create a new video idea in the user's library. integration_id, title, and kind are required. Provide as much upload-ready content as you can (script, hashtags, etc.) — the user expects to be able to shoot from the card. For 'seasonal' ideas you may also pass hard_date (ISO 8601) for when it should ship by. Expires_at is computed automatically from kind + hard_date.",
+      inputSchema: z.object({
+        integration_id: z.string().uuid(),
+        title: z.string(),
+        kind: KIND,
+        hook: z.string().nullish(),
+        format: z.string().nullish(),
+        rationale: z.string().nullish(),
+        source_refs: z.record(z.string(), z.unknown()).nullish(),
+        hard_date: z
+          .string()
+          .nullish()
+          .describe("ISO 8601 date — only meaningful when kind='seasonal'."),
+        script: z.string().nullish(),
+        post_title: z.string().nullish(),
+        description: z.string().nullish(),
+        hashtags: z.array(z.string()).nullish(),
+        cta: z.string().nullish(),
+        visual_notes: z.string().nullish(),
+      }),
+      execute: async (args) => {
+        const { data: integ } = await supabase
+          .from("integrations")
+          .select("provider")
+          .eq("user_id", userId)
+          .eq("id", args.integration_id)
+          .maybeSingle();
+        if (!integ) {
+          return { ok: false, error: "Integration not found." };
+        }
+
+        const expiresAt = computeExpiresAt({
+          kind: args.kind as VideoIdeaKind,
+          title: args.title,
+          hard_date: args.hard_date ?? undefined,
+        });
+
+        const { data, error } = await supabase
+          .from("video_ideas")
+          .insert({
+            user_id: userId,
+            integration_id: args.integration_id,
+            provider: (integ as { provider: string }).provider,
+            title: args.title,
+            kind: args.kind,
+            hook: args.hook ?? null,
+            format: args.format ?? null,
+            rationale: args.rationale ?? null,
+            source_refs: args.source_refs ?? {},
+            expires_at: expiresAt.toISOString(),
+            status: "pending",
+            script: args.script ?? null,
+            post_title: args.post_title ?? null,
+            description: args.description ?? null,
+            hashtags: normalizeHashtags(args.hashtags),
+            cta: args.cta ?? null,
+            visual_notes: args.visual_notes ?? null,
+          })
+          .select("id")
+          .single();
+
+        if (error) return { ok: false, error: error.message };
+        return { ok: true, id: (data as { id: string }).id };
+      },
+    }),
+
+    video_ideas_update: tool({
+      description:
+        "Update fields of an existing video idea. Any field you set is replaced; fields you omit are left alone. Useful for rewriting a hook ('make it more provocative'), swapping hashtags, polishing a script, etc. Returns ok + error.",
+      inputSchema: z.object({
+        id: z.string().uuid(),
+        title: z.string().nullish(),
+        hook: z.string().nullish(),
+        format: z.string().nullish(),
+        rationale: z.string().nullish(),
+        script: z.string().nullish(),
+        post_title: z.string().nullish(),
+        description: z.string().nullish(),
+        hashtags: z.array(z.string()).nullish(),
+        cta: z.string().nullish(),
+        visual_notes: z.string().nullish(),
+      }),
+      execute: async ({ id, ...fields }) => {
+        const patch: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(fields)) {
+          if (v === undefined) continue;
+          if (k === "hashtags" && Array.isArray(v)) {
+            patch[k] = normalizeHashtags(v as string[]);
+          } else {
+            patch[k] = v;
+          }
+        }
+        if (Object.keys(patch).length === 0) {
+          return { ok: false, error: "No fields to update." };
+        }
+        const { error } = await supabase
+          .from("video_ideas")
+          .update(patch)
+          .eq("user_id", userId)
+          .eq("id", id);
+        return { ok: !error, error: error?.message };
+      },
+    }),
+
+    video_ideas_set_status: tool({
+      description:
+        "Change an idea's status. 'pending' = default, in the active list. 'scheduled' = user plans to record it. 'done' = user has posted it. 'dismissed' = user rejected it (will be auto-pruned on next refresh).",
+      inputSchema: z.object({
+        id: z.string().uuid(),
+        status: STATUS,
+      }),
+      execute: async ({ id, status }) => {
+        const { error } = await supabase
+          .from("video_ideas")
+          .update({ status })
+          .eq("user_id", userId)
+          .eq("id", id);
+        return { ok: !error, error: error?.message };
+      },
+    }),
+
+    video_ideas_delete: tool({
+      description:
+        "Permanently delete a video idea by id. Use sparingly — usually setting status to 'dismissed' via video_ideas_set_status is the better call since it keeps audit info.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+      execute: async ({ id }) => {
+        const { error } = await supabase
+          .from("video_ideas")
+          .delete()
+          .eq("user_id", userId)
+          .eq("id", id);
+        return { ok: !error, error: error?.message };
+      },
+    }),
+  };
+}

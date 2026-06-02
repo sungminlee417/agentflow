@@ -27,6 +27,15 @@ function systemPromptFor(connected: string[]): string {
       "- Don't open a PR or post a comment without first explaining your plan to the user in chat and getting at least implicit consent (e.g. the user asked for it).",
     );
   }
+  lines.push(
+    "",
+    "Video ideas library:",
+    "- The user has a curated /video-ideas page where each card is a shoot-ready concept (title, hook, full beat-by-beat script with SAY/ACTION/ON-SCREEN TEXT cues, post_title, description, hashtags, cta, visual_notes).",
+    "- Tools: video_ideas_list_accounts (find which account to act on), video_ideas_list (browse pending/scheduled/done/dismissed ideas), video_ideas_get (full content of one), video_ideas_create (add a new idea — provide all the upload-ready content fields), video_ideas_update (rewrite hook, swap hashtags, polish script), video_ideas_set_status (scheduled / done / dismissed), video_ideas_delete (rarely — prefer dismissed).",
+    "- When creating ideas, ground them in evidence: call the user's other tools (tiktok_top_my_videos, tiktok_list_my_videos, tiktok_search_hashtag, etc.) first to anchor on what actually works for this creator. Never invent hashtags or stats.",
+    "- Match the creator's voice from their existing videos. The script should be specific enough to record without thinking — labeled time-stamped blocks with explicit spoken lines, on-screen text overlays, camera actions, transitions, and audio cues.",
+    "- Confirm with the user before bulk operations (create N ideas at once, delete several, mass-update).",
+  );
   return lines.join("\n");
 }
 

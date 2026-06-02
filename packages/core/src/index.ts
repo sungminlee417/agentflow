@@ -13,5 +13,6 @@ export * from "./tools/instagram";
 export * from "./tools/apify-tiktok";
 export * from "./tools/transcription";
 export * from "./tools/uploads";
+export * from "./tools/video-ideas";
 export * from "./agents/issue-agent";
 export * from "./agents/video-ideas-agent";

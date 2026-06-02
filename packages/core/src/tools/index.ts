@@ -9,6 +9,7 @@ import { buildInstagramTools } from "./instagram";
 import { buildApifyTikTokTools, loadApifyKey } from "./apify-tiktok";
 import { buildUploadsTools } from "./uploads";
 import { buildTranscriptionTools, loadOpenAIKey } from "./transcription";
+import { buildVideoIdeasTools } from "./video-ideas";
 
 // Compose the agent's tool set from connected integrations + service
 // keys + uploads. Multi-account aware: a user may have several
@@ -123,6 +124,7 @@ export async function buildToolsForIntegrations(
   }
 
   Object.assign(tools, buildUploadsTools(supabase, userId));
+  Object.assign(tools, buildVideoIdeasTools(supabase, userId));
 
   return { tools, connected };
 }
