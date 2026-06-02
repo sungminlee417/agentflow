@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 export type VideoIdeaRow = {
@@ -62,6 +62,12 @@ export function VideoIdeasList({
 }) {
   const router = useRouter();
   const [ideas, setIdeas] = useState<VideoIdeaRow[]>(initial);
+  // Keep local state in sync with server props after router.refresh().
+  // Without this, useState(initial) only takes the value on first
+  // render and the page appears unchanged until a hard reload.
+  useEffect(() => {
+    setIdeas(initial);
+  }, [initial]);
   const [target, setTarget] = useState(targetCount);
   const [filter, setFilter] = useState<KindFilter>("all");
   const [refreshing, setRefreshing] = useState(false);
