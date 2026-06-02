@@ -4,6 +4,7 @@ export * from "./model-catalog";
 export * from "./managers";
 export * from "./automation-types";
 export * from "./oauth-credentials";
+export * from "./oauth-refresh";
 export * from "./tools";
 export * from "./tools/github";
 export * from "./tools/youtube";
