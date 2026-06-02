@@ -56,6 +56,13 @@ export async function GET(request: NextRequest) {
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("code_challenge", codeChallenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
+  // Force the consent screen every time. Without this, TikTok silently
+  // auto-approves whichever account previously authorized this app,
+  // which makes adding a second account from the same browser nearly
+  // impossible. With disable_auto_auth=1, the user sees the consent
+  // screen, can verify which TikTok account it's running against, and
+  // can back out + switch accounts if it's wrong.
+  authorizeUrl.searchParams.set("disable_auto_auth", "1");
 
   const response = NextResponse.redirect(authorizeUrl);
   response.cookies.set(STATE_COOKIE, state, {
