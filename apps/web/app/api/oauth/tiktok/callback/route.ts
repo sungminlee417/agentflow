@@ -86,8 +86,11 @@ export async function GET(request: NextRequest) {
       "https://open.tiktokapis.com/v2/user/info/?fields=open_id,union_id,display_name,username",
       { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
     );
+    const meText = await meRes.text();
+    console.log("[tiktok/callback] /v2/user/info status:", meRes.status);
+    console.log("[tiktok/callback] /v2/user/info body:", meText.slice(0, 500));
     if (meRes.ok) {
-      const meJson = (await meRes.json()) as {
+      const meJson = JSON.parse(meText) as {
         data?: {
           user?: {
             open_id?: string;
@@ -101,8 +104,15 @@ export async function GET(request: NextRequest) {
       displayName = meJson.data?.user?.display_name ?? null;
     }
   } catch (err) {
-    console.error("tiktok identity fetch failed:", err);
+    console.error("[tiktok/callback] identity fetch failed:", err);
   }
+
+  console.log("[tiktok/callback] resolved account:", {
+    accountId,
+    handle,
+    displayName,
+    open_id_from_token: tokenData.open_id,
+  });
 
   if (!accountId) {
     return NextResponse.redirect(

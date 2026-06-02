@@ -52,6 +52,9 @@ export async function upsertIntegrationByAccount(
     .eq("provider_account_id", args.providerAccountId)
     .maybeSingle();
   if (existing?.id) {
+    console.log(
+      `[integration-upsert] ${args.provider}: updating existing row ${existing.id} for account ${args.providerAccountId}`,
+    );
     const { error } = await supabase
       .from("integrations")
       .update(baseFields)
@@ -60,11 +63,23 @@ export async function upsertIntegrationByAccount(
   }
 
   // 2. Fresh row.
+  console.log(
+    `[integration-upsert] ${args.provider}: inserting NEW row for account ${args.providerAccountId} (handle=${args.handle})`,
+  );
   const { data: inserted, error } = await supabase
     .from("integrations")
     .insert(baseFields)
     .select("id")
     .single();
+  if (error) {
+    console.error(
+      `[integration-upsert] insert failed for ${args.provider}/${args.providerAccountId}: ${error.message}`,
+    );
+  } else {
+    console.log(
+      `[integration-upsert] inserted ${args.provider} row ${inserted?.id}`,
+    );
+  }
   return {
     error: error?.message ?? null,
     integrationId: inserted?.id ?? null,
