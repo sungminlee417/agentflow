@@ -2,6 +2,11 @@ import { tool } from "ai";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeExpiresAt, type VideoIdeaKind } from "../agents/video-ideas-agent";
+import {
+  runVideoReview,
+  saveReview,
+  extractTikTokVideoId,
+} from "../agents/video-review-agent";
 
 // Video-ideas CRUD tools for the chat agent.
 //
@@ -233,6 +238,83 @@ export function buildVideoIdeasTools(
           .eq("user_id", userId)
           .eq("id", id);
         return { ok: !error, error: error?.message };
+      },
+    }),
+
+    video_ideas_mark_posted: tool({
+      description:
+        "Link an idea to the actual TikTok video the user posted, mark the idea 'done', and schedule a performance review at +48h. Accepts either the full TikTok URL (preferred — we parse the numeric video id out) or the raw video id. After this, the worker will pull stats + write a post-mortem automatically; the user can also trigger early review via video_ideas_run_review.",
+      inputSchema: z.object({
+        id: z.string().uuid(),
+        posted_video_url: z.string().nullish(),
+        posted_video_id: z.string().nullish(),
+      }),
+      execute: async ({ id, posted_video_url, posted_video_id }) => {
+        const videoId =
+          posted_video_id ?? extractTikTokVideoId(posted_video_url ?? "");
+        if (!videoId) {
+          return {
+            ok: false,
+            error:
+              "Could not parse a video id. TikTok URLs look like https://www.tiktok.com/@user/video/1234567890.",
+          };
+        }
+        const url =
+          posted_video_url ?? `https://www.tiktok.com/video/${videoId}`;
+        const postedAt = new Date();
+        const nextReview = new Date(
+          postedAt.getTime() + 48 * 60 * 60 * 1000,
+        );
+        const { error } = await supabase
+          .from("video_ideas")
+          .update({
+            posted_video_id: videoId,
+            posted_video_url: url,
+            posted_at: postedAt.toISOString(),
+            status: "done",
+            next_review_at: nextReview.toISOString(),
+            performance_verdict: null,
+            performance_score: null,
+            performance_review: null,
+            performance_stats: null,
+            last_reviewed_at: null,
+          })
+          .eq("user_id", userId)
+          .eq("id", id);
+        return {
+          ok: !error,
+          error: error?.message,
+          posted_video_id: videoId,
+          next_review_at: nextReview.toISOString(),
+        };
+      },
+    }),
+
+    video_ideas_run_review: tool({
+      description:
+        "Run a performance review for a posted idea NOW (synchronously) — pulls the current TikTok stats, compares to the creator's baseline, classifies the outcome (hit / on_track / underperformed / too_early), and writes a markdown post-mortem. Idempotent — safe to re-run for a fresh reading. Requires the idea to already be linked via video_ideas_mark_posted.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+      execute: async ({ id }) => {
+        const result = await runVideoReview({
+          supabase,
+          userId,
+          ideaId: id,
+        });
+        if (!result.ok) {
+          return { ok: false, error: result.error };
+        }
+        const saved = await saveReview(supabase, userId, id, result);
+        if (!saved.ok) {
+          return { ok: false, error: saved.error };
+        }
+        return {
+          ok: true,
+          verdict: result.verdict,
+          score: result.score,
+          stats: result.stats,
+          review: result.review,
+          next_review_at: result.next_review_at?.toISOString() ?? null,
+        };
       },
     }),
   };

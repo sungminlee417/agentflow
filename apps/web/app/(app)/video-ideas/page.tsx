@@ -19,13 +19,21 @@ export default async function VideoIdeasPage({
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  // Prune expired + dismissed before rendering across all accounts.
+  // Prune dismissed + naturally-expired pending ideas. Done ideas are
+  // kept regardless of expires_at — they're the user's post history
+  // and feed the review loop. Scheduled ideas are kept too.
   const nowIso = new Date().toISOString();
   await supabase
     .from("video_ideas")
     .delete()
     .eq("user_id", user.id)
-    .or(`expires_at.lt.${nowIso},status.eq.dismissed`);
+    .eq("status", "dismissed");
+  await supabase
+    .from("video_ideas")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("status", "pending")
+    .lt("expires_at", nowIso);
 
   const { data: integrations } = await supabase
     .from("integrations")
@@ -55,7 +63,7 @@ export default async function VideoIdeasPage({
       supabase
         .from("video_ideas")
         .select(
-          "id, provider, integration_id, title, hook, format, rationale, kind, source_refs, expires_at, status, created_at, script, post_title, description, hashtags, cta, visual_notes",
+          "id, provider, integration_id, title, hook, format, rationale, kind, source_refs, expires_at, status, created_at, script, post_title, description, hashtags, cta, visual_notes, posted_video_id, posted_video_url, posted_at, performance_verdict, performance_score, performance_review, performance_stats, last_reviewed_at, next_review_at",
         )
         .eq("user_id", user.id)
         .eq("integration_id", selectedAccountId)

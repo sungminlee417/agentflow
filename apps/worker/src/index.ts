@@ -1,6 +1,11 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
-import { decrypt, runIssueAgent } from "@agentflow/core";
+import {
+  decrypt,
+  runIssueAgent,
+  runVideoReview,
+  saveReview,
+} from "@agentflow/core";
 
 // Worker entry point.
 //
@@ -185,7 +190,80 @@ async function processAutomation(a: Automation): Promise<void> {
   console.warn(`[worker] unknown automation type: ${a.type}`);
 }
 
+// Video performance reviews — for any idea whose next_review_at has
+// passed, pull the actual stats + write the post-mortem. The review
+// agent itself decides whether to schedule another review (it does
+// for the +48h pass, stops after +7d).
+async function processDueReviews(): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const { data: due, error } = await supabase
+    .from("video_ideas")
+    .select("id, user_id")
+    .eq("status", "done")
+    .not("posted_video_id", "is", null)
+    .not("next_review_at", "is", null)
+    .lt("next_review_at", nowIso)
+    .limit(20);
+  if (error) {
+    console.error(`[worker] load due reviews failed:`, error);
+    return;
+  }
+  if (!due || due.length === 0) return;
+
+  for (let i = 0; i < due.length; i += MAX_CONCURRENT_PER_TICK) {
+    const batch = due.slice(i, i + MAX_CONCURRENT_PER_TICK);
+    await Promise.all(
+      batch.map(async (row) => {
+        const userId = row.user_id as string;
+        const ideaId = row.id as string;
+        try {
+          console.log(`[worker] reviewing idea ${ideaId} for user ${userId}`);
+          const result = await runVideoReview({
+            supabase,
+            userId,
+            ideaId,
+          });
+          if (!result.ok) {
+            console.warn(
+              `[worker] review ${ideaId} failed: ${result.error}; backing off 24h`,
+            );
+            // Avoid hammering on persistent failures (e.g. token
+            // permanently revoked). Push next attempt out 24h.
+            await supabase
+              .from("video_ideas")
+              .update({
+                next_review_at: new Date(
+                  Date.now() + 24 * 60 * 60 * 1000,
+                ).toISOString(),
+              })
+              .eq("user_id", userId)
+              .eq("id", ideaId);
+            return;
+          }
+          const saved = await saveReview(supabase, userId, ideaId, result);
+          if (!saved.ok) {
+            console.error(`[worker] saveReview ${ideaId} failed:`, saved.error);
+          } else {
+            console.log(
+              `[worker] reviewed ${ideaId} → verdict=${result.verdict} ratio=${result.stats?.ratio.toFixed(2)}`,
+            );
+          }
+        } catch (err) {
+          console.error(`[worker] review ${ideaId} crashed:`, err);
+        }
+      }),
+    );
+  }
+}
+
 async function tick(): Promise<void> {
+  // Two independent workloads: github automations + due video reviews.
+  // Both swallow their own errors so one bad row doesn't stall the
+  // other.
+  await Promise.all([tickAutomations(), processDueReviews()]);
+}
+
+async function tickAutomations(): Promise<void> {
   const { data: automations, error } = await supabase
     .from("automations")
     .select("id, user_id, type, config")

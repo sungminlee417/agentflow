@@ -92,14 +92,48 @@ function describeAvailable(connected: string[]): string {
   return lines.join("\n");
 }
 
-function tiktokPrompt(count: number, today: string, connected: string[]): string {
+type RecentReview = {
+  title: string;
+  kind: string;
+  format: string | null;
+  verdict: string | null;
+  ratio: number | null;
+  takeaways: string | null;
+};
+
+function reviewsBlock(reviews: RecentReview[]): string {
+  if (reviews.length === 0) return "";
+  const lines: string[] = [
+    "",
+    "Recent post-mortems from videos the creator has actually posted (use these to AVOID repeating past misses and DOUBLE DOWN on patterns that hit):",
+  ];
+  for (const r of reviews) {
+    const ratioStr = r.ratio != null ? `${r.ratio.toFixed(2)}× median` : "unrated";
+    lines.push(
+      `- "${r.title}" (${r.kind}, ${r.format ?? "?"}): ${r.verdict ?? "?"} · ${ratioStr}`,
+    );
+    if (r.takeaways) {
+      lines.push(`  Learnings: ${r.takeaways}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function tiktokPrompt(
+  count: number,
+  today: string,
+  connected: string[],
+  recentReviews: RecentReview[] = [],
+): string {
   const hasApify = connected.includes("apify");
+  const hasReviews = recentReviews.length > 0;
   return `You are a TikTok content strategist. Produce exactly ${count} fresh video ideas as a JSON object.
 
 Today is ${today}.
 
 Available tools:
 ${describeAvailable(connected)}
+${reviewsBlock(recentReviews)}
 
 Required procedure:
 1. tiktok_top_my_videos (top_n 10, from_history 100) — these are the creator's lifetime best by engagement rate (likes ÷ views), pulled across their last ~100 uploads. This tells you what their audience actually rewards, not just what they posted recently.
@@ -122,7 +156,8 @@ Critical:
 - Each title must be specific and recordable — "Cover Hotel California — acoustic vs classical" not "do another comparison video".
 - hook must be the actual first spoken/shown line.
 - format should be short ("acoustic vs classical comparison", "solo performance with text overlay").
-- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").
+- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").${hasReviews ? `
+- The post-mortems above are GROUND TRUTH from videos this creator already shipped. Steer toward formats/hooks that hit; steer away from ones that underperformed. When you reuse a winning pattern, say so in the rationale.` : ""}
 
 Upload-ready content for EVERY idea — the creator should be able to record + post directly from the card without writing anything new:
 
@@ -253,8 +288,56 @@ export async function runVideoIdeasAgent({
     return { ok: false, error: "TikTok integration not connected." };
   }
 
+  // Pull recent post-mortems for this account — they ground future
+  // ideas in actual outcomes (what hit, what missed).
+  const recentReviews: RecentReview[] = [];
+  try {
+    const { data: reviewed } = await supabase
+      .from("video_ideas")
+      .select(
+        "title, kind, format, performance_verdict, performance_stats, performance_review",
+      )
+      .eq("user_id", userId)
+      .eq("integration_id", integrationId)
+      .not("performance_verdict", "is", null)
+      .order("last_reviewed_at", { ascending: false })
+      .limit(8);
+    for (const row of (reviewed ?? []) as Array<{
+      title: string;
+      kind: string;
+      format: string | null;
+      performance_verdict: string | null;
+      performance_stats: { ratio?: number } | null;
+      performance_review: string | null;
+    }>) {
+      // Extract the bullets under "Takeaways for the next video" — that's
+      // the actionable part for future generation.
+      let takeaways: string | null = null;
+      if (row.performance_review) {
+        const tIdx = row.performance_review.indexOf("Takeaways");
+        if (tIdx >= 0) {
+          takeaways = row.performance_review
+            .slice(tIdx)
+            .replace(/^[#\s]*Takeaways[^\n]*\n?/, "")
+            .trim()
+            .slice(0, 400);
+        }
+      }
+      recentReviews.push({
+        title: row.title,
+        kind: row.kind,
+        format: row.format,
+        verdict: row.performance_verdict,
+        ratio: row.performance_stats?.ratio ?? null,
+        takeaways,
+      });
+    }
+  } catch (err) {
+    console.error("[video-ideas-agent] failed to load recent reviews:", err);
+  }
+
   const today = new Date().toISOString().slice(0, 10);
-  const system = tiktokPrompt(count, today, connected);
+  const system = tiktokPrompt(count, today, connected, recentReviews);
 
   let stepCount = 0;
   try {

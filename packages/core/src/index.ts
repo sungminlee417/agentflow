@@ -16,3 +16,4 @@ export * from "./tools/uploads";
 export * from "./tools/video-ideas";
 export * from "./agents/issue-agent";
 export * from "./agents/video-ideas-agent";
+export * from "./agents/video-review-agent";

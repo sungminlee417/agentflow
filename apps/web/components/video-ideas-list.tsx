@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Modal } from "@/components/modal";
+import { MarkDoneModal } from "@/components/mark-done-modal";
 
 export type VideoIdeaRow = {
   id: string;
@@ -24,6 +25,28 @@ export type VideoIdeaRow = {
   hashtags: string[] | null;
   cta: string | null;
   visual_notes: string | null;
+  posted_video_id: string | null;
+  posted_video_url: string | null;
+  posted_at: string | null;
+  performance_verdict:
+    | "hit"
+    | "on_track"
+    | "underperformed"
+    | "too_early"
+    | null;
+  performance_score: number | null;
+  performance_review: string | null;
+  performance_stats: {
+    views?: number;
+    likes?: number;
+    comments?: number;
+    shares?: number;
+    engagement_rate?: number;
+    baseline_median_rate?: number;
+    ratio?: number;
+  } | null;
+  last_reviewed_at: string | null;
+  next_review_at: string | null;
 };
 
 export type IdeasAccount = {
@@ -119,11 +142,32 @@ export function VideoIdeasList({
     [ideas, detailIdeaId],
   );
 
+  const [view, setView] = useState<"pending" | "posted">("pending");
+
+  const pendingIdeas = useMemo(
+    () =>
+      ideas.filter(
+        (i) => i.status === "pending" || i.status === "scheduled",
+      ),
+    [ideas],
+  );
+  const postedIdeas = useMemo(
+    () =>
+      ideas
+        .filter((i) => i.status === "done")
+        .sort((a, b) => {
+          const aT = a.posted_at ?? a.created_at;
+          const bT = b.posted_at ?? b.created_at;
+          return new Date(bT).getTime() - new Date(aT).getTime();
+        }),
+    [ideas],
+  );
+
   const filtered = useMemo(() => {
-    const list = ideas.filter((i) => i.status === "pending");
-    if (filter === "all") return list;
-    return list.filter((i) => i.kind === filter);
-  }, [ideas, filter]);
+    const base = view === "pending" ? pendingIdeas : postedIdeas;
+    if (filter === "all") return base;
+    return base.filter((i) => i.kind === filter);
+  }, [view, pendingIdeas, postedIdeas, filter]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {
@@ -133,13 +177,40 @@ export function VideoIdeasList({
       competitor: 0,
       seasonal: 0,
     };
-    for (const i of ideas) {
-      if (i.status !== "pending") continue;
+    const base = view === "pending" ? pendingIdeas : postedIdeas;
+    for (const i of base) {
       c["all"] = (c["all"] ?? 0) + 1;
       c[i.kind] = (c[i.kind] ?? 0) + 1;
     }
     return c;
-  }, [ideas]);
+  }, [view, pendingIdeas, postedIdeas]);
+
+  const [markDoneIdeaId, setMarkDoneIdeaId] = useState<string | null>(null);
+  const markDoneIdea = useMemo(
+    () => ideas.find((i) => i.id === markDoneIdeaId) ?? null,
+    [ideas, markDoneIdeaId],
+  );
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+
+  async function runReviewNow(id: string) {
+    setReviewingId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/video-ideas/${id}/review`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setError(`Review failed: ${text.slice(0, 200)}`);
+        return;
+      }
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReviewingId(null);
+    }
+  }
 
   function switchAccount(id: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -418,7 +489,29 @@ export function VideoIdeasList({
         </div>
       )}
 
-      <div className="mt-6 flex flex-wrap gap-2">
+      <div className="mt-6 flex items-center gap-1 rounded-md border border-neutral-200 bg-neutral-100/60 p-1 text-xs dark:border-neutral-800 dark:bg-neutral-900/60">
+        {(["pending", "posted"] as const).map((v) => {
+          const active = view === v;
+          const count = v === "pending" ? pendingIdeas.length : postedIdeas.length;
+          return (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={`flex-1 rounded px-3 py-1.5 font-medium transition ${
+                active
+                  ? "bg-white text-neutral-900 shadow-sm dark:bg-neutral-950 dark:text-neutral-100"
+                  : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+              }`}
+            >
+              {v === "pending" ? "Ideas" : "Posted"}{" "}
+              <span className="opacity-60">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
         {(["all", "pattern", "trend", "competitor", "seasonal"] as KindFilter[]).map(
           (k) => {
             const active = filter === k;
@@ -445,9 +538,13 @@ export function VideoIdeasList({
       <section className="mt-6 space-y-3">
         {filtered.length === 0 && (
           <div className="rounded-lg border border-dashed border-neutral-300 px-4 py-10 text-center text-sm text-neutral-500 dark:border-neutral-700">
-            {ideas.filter((i) => i.status === "pending").length === 0
-              ? "No ideas yet for this account. Hit Refresh to generate the first batch."
-              : "No ideas match this filter."}
+            {view === "pending"
+              ? pendingIdeas.length === 0
+                ? "No ideas yet for this account. Hit Refresh to generate the first batch."
+                : "No ideas match this filter."
+              : postedIdeas.length === 0
+                ? "Nothing posted yet. Mark an idea as posted to see how it performs."
+                : "No posted videos match this filter."}
           </div>
         )}
 
@@ -465,15 +562,17 @@ export function VideoIdeasList({
                 >
                   {KIND_LABELS[i.kind]}
                 </span>
-                <span
-                  className={`text-xs ${
-                    isUrgent(i.expires_at)
-                      ? "text-rose-600 dark:text-rose-400"
-                      : "text-neutral-500"
-                  }`}
-                >
-                  {expiresLabel(i.expires_at)}
-                </span>
+                {i.status !== "done" && (
+                  <span
+                    className={`text-xs ${
+                      isUrgent(i.expires_at)
+                        ? "text-rose-600 dark:text-rose-400"
+                        : "text-neutral-500"
+                    }`}
+                  >
+                    {expiresLabel(i.expires_at)}
+                  </span>
+                )}
                 {hasFullContent && (
                   <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
                     Upload-ready
@@ -506,6 +605,13 @@ export function VideoIdeasList({
                 </p>
               )}
               <SourceRefs refs={i.source_refs} />
+              {i.status === "done" && (
+                <PerformanceBlock
+                  i={i}
+                  reviewing={reviewingId === i.id}
+                  onReview={() => runReviewNow(i.id)}
+                />
+              )}
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -514,32 +620,47 @@ export function VideoIdeasList({
                 >
                   View details →
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setStatus(i.id, "scheduled")}
-                  className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                >
-                  Mark scheduled
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStatus(i.id, "done")}
-                  className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                >
-                  Done
-                </button>
-                <button
-                  type="button"
-                  onClick={() => remove(i.id)}
-                  className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
-                >
-                  Dismiss
-                </button>
+                {i.status !== "done" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setStatus(i.id, "scheduled")}
+                      className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    >
+                      Mark scheduled
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMarkDoneIdeaId(i.id)}
+                      className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    >
+                      Mark posted…
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => remove(i.id)}
+                      className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                    >
+                      Dismiss
+                    </button>
+                  </>
+                )}
               </div>
             </article>
           );
         })}
       </section>
+
+      <MarkDoneModal
+        open={markDoneIdeaId !== null}
+        ideaId={markDoneIdeaId}
+        ideaTitle={markDoneIdea?.title ?? null}
+        onClose={() => setMarkDoneIdeaId(null)}
+        onLinked={() => {
+          router.refresh();
+          setMessage("Marked as posted. First review in ~48h.");
+        }}
+      />
 
       {detailIdea && (
         <IdeaDetailModal
@@ -738,6 +859,152 @@ function CopyButton({ text, label }: { text: string; label: string }) {
     >
       {copied ? "Copied ✓" : label}
     </button>
+  );
+}
+
+const VERDICT_LABELS: Record<NonNullable<VideoIdeaRow["performance_verdict"]>, string> = {
+  hit: "Hit",
+  on_track: "On track",
+  underperformed: "Underperformed",
+  too_early: "Too early to tell",
+};
+
+const VERDICT_COLORS: Record<
+  NonNullable<VideoIdeaRow["performance_verdict"]>,
+  string
+> = {
+  hit: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
+  on_track:
+    "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200",
+  underperformed:
+    "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300",
+  too_early:
+    "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300",
+};
+
+function formatRelative(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return "just now";
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+  return `${Math.round(ms / 86_400_000)}d ago`;
+}
+
+function formatUntil(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return "due now";
+  if (ms < 3_600_000) return `in ${Math.max(1, Math.round(ms / 60_000))}m`;
+  if (ms < 86_400_000) return `in ${Math.round(ms / 3_600_000)}h`;
+  return `in ${Math.round(ms / 86_400_000)}d`;
+}
+
+function PerformanceBlock({
+  i,
+  reviewing,
+  onReview,
+}: {
+  i: VideoIdeaRow;
+  reviewing: boolean;
+  onReview: () => void;
+}) {
+  const stats = i.performance_stats;
+  const verdict = i.performance_verdict;
+  const hasReview = !!i.performance_review;
+
+  return (
+    <div className="mt-3 rounded-md border border-neutral-200 bg-neutral-50/60 p-3 dark:border-neutral-800 dark:bg-neutral-900/60">
+      <div className="flex flex-wrap items-center gap-2">
+        {verdict ? (
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${VERDICT_COLORS[verdict]}`}
+          >
+            {VERDICT_LABELS[verdict]}
+            {stats?.ratio != null && verdict !== "too_early" && (
+              <span className="ml-1 opacity-75">
+                · {stats.ratio.toFixed(2)}× median
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="inline-flex items-center rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+            Review pending
+          </span>
+        )}
+        {i.posted_at && (
+          <span className="text-[11px] text-neutral-500">
+            posted {formatRelative(i.posted_at)}
+          </span>
+        )}
+        {!verdict && i.next_review_at && (
+          <span className="text-[11px] text-neutral-500">
+            · next review {formatUntil(i.next_review_at)}
+          </span>
+        )}
+        {i.posted_video_url && (
+          <a
+            href={i.posted_video_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto text-[11px] text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
+          >
+            Open on TikTok ↗
+          </a>
+        )}
+      </div>
+
+      {stats && (stats.views ?? 0) > 0 && (
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[11px]">
+          <Stat label="Views" value={(stats.views ?? 0).toLocaleString()} />
+          <Stat label="Likes" value={(stats.likes ?? 0).toLocaleString()} />
+          <Stat
+            label="Comments"
+            value={(stats.comments ?? 0).toLocaleString()}
+          />
+          <Stat label="Shares" value={(stats.shares ?? 0).toLocaleString()} />
+        </div>
+      )}
+
+      {hasReview && (
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100">
+            Read post-mortem
+          </summary>
+          <div className="mt-1.5 whitespace-pre-wrap text-neutral-700 dark:text-neutral-300">
+            {i.performance_review}
+          </div>
+        </details>
+      )}
+
+      {i.posted_video_id && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={onReview}
+            disabled={reviewing}
+            className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-[11px] text-neutral-700 transition hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900"
+          >
+            {reviewing
+              ? "Reviewing…"
+              : hasReview
+                ? "Re-review now"
+                : "Review now"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border border-neutral-200 bg-white px-2 py-1 dark:border-neutral-800 dark:bg-neutral-950">
+      <div className="text-[10px] uppercase tracking-wide text-neutral-500">
+        {label}
+      </div>
+      <div className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+        {value}
+      </div>
+    </div>
   );
 }
 
