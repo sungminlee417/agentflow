@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { MANAGERS } from "@agentflow/core";
 
 type ConversationSummary = {
@@ -199,7 +198,6 @@ export function Sidebar({
               <span>Settings</span>
             </span>
           </Link>
-          <ThemeToggle />
           <button
             type="button"
             onClick={signOut}

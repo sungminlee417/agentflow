@@ -1,6 +1,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { PROVIDERS } from "@agentflow/core";
 import { ApiKeyForm } from "@/components/api-key-form";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export default async function SettingsPage() {
   const supabase = await createSupabaseServerClient();
@@ -44,6 +45,18 @@ export default async function SettingsPage() {
               />
             );
           })}
+        </div>
+      </section>
+
+      <section className="mt-10">
+        <h2 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">
+          Appearance
+        </h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Auto follows your system setting.
+        </p>
+        <div className="mt-4">
+          <ThemeToggle />
         </div>
       </section>
     </div>
