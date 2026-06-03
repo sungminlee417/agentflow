@@ -389,22 +389,58 @@ export function VideoIdeasList({
     );
   }
 
+  // Stats for the strip at the top — only meaningful when on the
+  // posted view (or compact pending counts otherwise).
+  const lastHit = useMemo(
+    () =>
+      postedIdeas.find(
+        (i) =>
+          i.performance_verdict === "hit" &&
+          i.performance_stats?.ratio != null,
+      ),
+    [postedIdeas],
+  );
+  const reviewsPending = useMemo(
+    () =>
+      postedIdeas.filter(
+        (i) => i.posted_video_id && !i.performance_verdict,
+      ).length,
+    [postedIdeas],
+  );
+
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-            Video ideas
-          </h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            One running list per connected account. Each card has an
-            expiry — trends die, patterns stay. Refresh tops up to your target
-            count.
-          </p>
+    <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 md:py-10">
+      {/* Mobile leaves room for the fixed hamburger button (left-3 top-3) */}
+      <header className="flex flex-wrap items-center justify-between gap-3 pl-10 md:pl-0">
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedAccountId ?? ""}
+            onChange={(e) => switchAccount(e.target.value)}
+            className="max-w-[60vw] truncate rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm font-medium text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+          >
+            {[...accountsByProvider.entries()].map(([provider, list]) => (
+              <optgroup
+                key={provider}
+                label={PROVIDER_LABELS[provider] ?? provider}
+              >
+                {list.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {accountTitle(a)}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <Link
+            href="/integrations"
+            className="text-xs text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
+          >
+            +
+          </Link>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-neutral-500">
-            Target
+            <span className="hidden sm:inline">Target</span>
             <select
               value={target}
               onChange={(e) => updateTarget(Number(e.target.value))}
@@ -422,22 +458,58 @@ export function VideoIdeasList({
             type="button"
             onClick={refresh}
             disabled={refreshing || !selectedAccountId}
-            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-900 transition hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+            className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
           >
             {refreshing && (
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-700 dark:border-neutral-700 dark:border-t-neutral-200" />
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white dark:border-black/40 dark:border-t-black" />
             )}
-            {refreshing ? "Generating…" : "↻ Refresh"}
+            {refreshing ? "Generating" : "↻ Refresh"}
           </button>
         </div>
       </header>
 
+      {/* Stat strip — quick glanceable state */}
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-500">
+        <span>
+          <strong className="text-neutral-900 dark:text-neutral-100">
+            {pendingIdeas.length}
+          </strong>{" "}
+          ready
+        </span>
+        <span>
+          <strong className="text-neutral-900 dark:text-neutral-100">
+            {postedIdeas.length}
+          </strong>{" "}
+          posted
+        </span>
+        {reviewsPending > 0 && (
+          <span>
+            <strong className="text-amber-700 dark:text-amber-300">
+              {reviewsPending}
+            </strong>{" "}
+            awaiting review
+          </span>
+        )}
+        {lastHit && (
+          <span className="truncate">
+            <span className="text-emerald-700 dark:text-emerald-300">★</span>{" "}
+            last hit:{" "}
+            <span className="text-neutral-900 dark:text-neutral-100">
+              {lastHit.title.length > 40
+                ? lastHit.title.slice(0, 40) + "…"
+                : lastHit.title}
+            </span>{" "}
+            ({(lastHit.performance_stats?.ratio ?? 0).toFixed(1)}×)
+          </span>
+        )}
+      </div>
+
       {refreshing && progress && (
-        <div className="mt-6 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm dark:border-blue-900 dark:bg-blue-950/30">
-          <div className="flex items-center gap-3">
-            <span className="inline-block h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-blue-500" />
+        <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm dark:border-blue-900 dark:bg-blue-950/30">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-blue-500" />
             <div className="min-w-0 flex-1">
-              <div className="flex items-baseline gap-2">
+              <div className="flex flex-wrap items-baseline gap-x-2">
                 {progress.count > 0 && (
                   <span className="font-mono text-[11px] text-blue-700 dark:text-blue-300">
                     step {progress.count}
@@ -448,41 +520,12 @@ export function VideoIdeasList({
                 </span>
               </div>
               <p className="mt-0.5 text-[11px] text-blue-700/70 dark:text-blue-300/70">
-                Generation usually takes 30-60 seconds. You can leave this
-                tab — the run continues server-side.
+                30-60 seconds — runs server-side, safe to close the tab.
               </p>
             </div>
           </div>
         </div>
       )}
-
-      <div className="mt-6 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-neutral-500">Account:</span>
-        <select
-          value={selectedAccountId ?? ""}
-          onChange={(e) => switchAccount(e.target.value)}
-          className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900"
-        >
-          {[...accountsByProvider.entries()].map(([provider, list]) => (
-            <optgroup
-              key={provider}
-              label={PROVIDER_LABELS[provider] ?? provider}
-            >
-              {list.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {accountTitle(a)}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-        <Link
-          href="/integrations"
-          className="text-xs text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
-        >
-          + Add another account
-        </Link>
-      </div>
 
       {error && (
         <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">

@@ -24,9 +24,8 @@ export default async function SettingsPage() {
           AI provider keys
         </h2>
         <p className="mt-1 text-sm text-neutral-500">
-          Bring your own keys — they're encrypted at rest and used only to
-          forward your messages to the provider you select. Integrations and
-          automations live inside each Manager (sidebar).
+          Your keys are encrypted and sent directly to the AI provider — never
+          stored in plaintext, never shared.
         </p>
 
         <div className="mt-6 space-y-4">

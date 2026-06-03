@@ -397,8 +397,8 @@ export function IntegrationsHub({
   const socialProviders = providers.filter((i) => i.group === "social");
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <header>
+    <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 md:py-10">
+      <header className="pl-10 md:pl-0">
         <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
           Integrations
         </h1>
