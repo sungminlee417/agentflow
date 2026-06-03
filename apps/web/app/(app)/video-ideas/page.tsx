@@ -3,6 +3,7 @@ import {
   VideoIdeasList,
   type VideoIdeaRow,
   type IdeasAccount,
+  type ActiveGenerationJob,
 } from "@/components/video-ideas-list";
 
 // Only providers that the video-ideas agent currently supports.
@@ -58,25 +59,49 @@ export default async function VideoIdeasPage({
 
   let ideas: VideoIdeaRow[] = [];
   let targetCount = 10;
+  let activeJob: ActiveGenerationJob | null = null;
   if (selectedAccountId) {
-    const [{ data: ideasData }, { data: settings }] = await Promise.all([
-      supabase
-        .from("video_ideas")
-        .select(
-          "id, provider, integration_id, title, hook, format, rationale, kind, source_refs, expires_at, status, created_at, script, post_title, description, hashtags, cta, visual_notes, optimal_post_window, suggested_duration, thumbnail_concept, engagement_hook, trending_sound, posted_video_id, posted_video_url, posted_at, performance_verdict, performance_score, performance_review, performance_stats, last_reviewed_at, next_review_at",
-        )
-        .eq("user_id", user.id)
-        .eq("integration_id", selectedAccountId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("video_ideas_settings")
-        .select("target_count")
-        .eq("user_id", user.id)
-        .eq("integration_id", selectedAccountId)
-        .maybeSingle(),
-    ]);
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const [{ data: ideasData }, { data: settings }, { data: jobRow }] =
+      await Promise.all([
+        supabase
+          .from("video_ideas")
+          .select(
+            "id, provider, integration_id, title, hook, format, rationale, kind, source_refs, expires_at, status, created_at, script, post_title, description, hashtags, cta, visual_notes, optimal_post_window, suggested_duration, thumbnail_concept, engagement_hook, trending_sound, posted_video_id, posted_video_url, posted_at, performance_verdict, performance_score, performance_review, performance_stats, last_reviewed_at, next_review_at",
+          )
+          .eq("user_id", user.id)
+          .eq("integration_id", selectedAccountId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("video_ideas_settings")
+          .select("target_count")
+          .eq("user_id", user.id)
+          .eq("integration_id", selectedAccountId)
+          .maybeSingle(),
+        supabase
+          .from("video_ideas_generation_jobs")
+          .select(
+            "id, status, step_count, step_label, requested_count, started_at, updated_at",
+          )
+          .eq("user_id", user.id)
+          .eq("integration_id", selectedAccountId)
+          .eq("status", "running")
+          .gt("updated_at", fiveMinAgo)
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
     ideas = (ideasData ?? []) as VideoIdeaRow[];
     targetCount = settings?.target_count ?? 10;
+    if (jobRow) {
+      activeJob = {
+        id: jobRow.id as string,
+        step_count: (jobRow.step_count as number) ?? 0,
+        step_label: (jobRow.step_label as string | null) ?? "Working…",
+        requested_count: (jobRow.requested_count as number | null) ?? null,
+        started_at: jobRow.started_at as string,
+      };
+    }
   }
 
   return (
@@ -85,6 +110,7 @@ export default async function VideoIdeasPage({
       selectedAccountId={selectedAccountId}
       initial={ideas}
       targetCount={targetCount}
+      initialActiveJob={activeJob}
     />
   );
 }

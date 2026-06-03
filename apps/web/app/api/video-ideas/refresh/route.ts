@@ -6,6 +6,11 @@ import { computeExpiresAt, runVideoIdeasAgent } from "@agentflow/core";
 // SSE so the UI can show "Step 5 · Searching #fingerstyle…" instead
 // of a 60-second silent spinner.
 //
+// AND writes a persistent job row at every step. If the user navigates
+// away from /video-ideas mid-generation, the SSE stream dies but the
+// agent keeps running server-side and the job row keeps updating. The
+// page re-attaches via polling /api/video-ideas/jobs/[id] on return.
+//
 // Event types:
 //   • prepare  — initial bookkeeping (prune expired, count pending)
 //   • step     — { count, label } — the agent called a tool
@@ -17,9 +22,6 @@ import { computeExpiresAt, runVideoIdeasAgent } from "@agentflow/core";
 
 export const maxDuration = 60;
 
-// Human-friendly labels for the tool names the agent calls. Anything
-// not in this map falls back to the raw name so we never lie about
-// what's happening.
 const TOOL_LABELS: Record<string, string> = {
   tiktok_get_my_profile: "Reading your profile",
   tiktok_list_my_videos: "Reading your recent videos",
@@ -73,13 +75,44 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Don't kick off a duplicate if one is already in flight for this
+  // account. Saves the user from accidentally running two generations
+  // (and from being billed twice).
+  const { data: existingJob } = await supabase
+    .from("video_ideas_generation_jobs")
+    .select("id, started_at")
+    .eq("user_id", user.id)
+    .eq("integration_id", integrationId)
+    .eq("status", "running")
+    .gt("updated_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingJob) {
+    return NextResponse.json(
+      {
+        error: "A generation is already running for this account.",
+        job_id: existingJob.id,
+      },
+      { status: 409 },
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      let clientGone = false;
       const send = (event: string, data: Record<string, unknown>) => {
-        controller.enqueue(
-          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-        );
+        if (clientGone) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+          );
+        } catch {
+          // Controller already closed — user navigated away. Stop
+          // trying to send; the job row keeps updating from here.
+          clientGone = true;
+        }
       };
       const close = () => {
         try {
@@ -89,8 +122,50 @@ export async function POST(request: NextRequest) {
         }
       };
 
+      // Insert the job row up front so /jobs/active can find it
+      // immediately, even before the first onStep fires.
+      let jobId: string | null = null;
+      const { data: jobRow } = await supabase
+        .from("video_ideas_generation_jobs")
+        .insert({
+          user_id: user.id,
+          integration_id: integrationId,
+          status: "running",
+          step_count: 0,
+          step_label: "Starting…",
+        })
+        .select("id")
+        .single();
+      jobId = jobRow?.id ?? null;
+      if (jobId) send("job", { id: jobId });
+
+      async function updateJob(patch: Record<string, unknown>) {
+        if (!jobId) return;
+        await supabase
+          .from("video_ideas_generation_jobs")
+          .update({ ...patch, updated_at: new Date().toISOString() })
+          .eq("id", jobId);
+      }
+
+      async function finalizeJob(
+        status: "done" | "failed",
+        patch: Record<string, unknown>,
+      ) {
+        if (!jobId) return;
+        await supabase
+          .from("video_ideas_generation_jobs")
+          .update({
+            ...patch,
+            status,
+            updated_at: new Date().toISOString(),
+            finished_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      }
+
       try {
         send("prepare", { label: "Checking what's expired…" });
+        await updateJob({ step_label: "Checking what's expired…" });
         const nowIso = new Date().toISOString();
         await supabase
           .from("video_ideas")
@@ -121,6 +196,10 @@ export async function POST(request: NextRequest) {
             pending: pendingCount ?? 0,
             message: "Already at target.",
           });
+          await finalizeJob("done", {
+            generated_count: 0,
+            step_label: "Already at target.",
+          });
           close();
           return;
         }
@@ -128,19 +207,27 @@ export async function POST(request: NextRequest) {
         send("prepare", {
           label: `Generating ${deficit} new idea${deficit === 1 ? "" : "s"}…`,
         });
+        await updateJob({
+          requested_count: deficit,
+          step_label: `Generating ${deficit} new idea${deficit === 1 ? "" : "s"}…`,
+        });
 
         const result = await runVideoIdeasAgent({
           supabase,
           userId: user.id,
           integrationId,
           count: deficit,
-          onStep: ({ count, description }) => {
-            send("step", { count, label: humanizeStep(description) });
+          onStep: async ({ count, description }) => {
+            const label = humanizeStep(description);
+            send("step", { count, label });
+            await updateJob({ step_count: count, step_label: label });
           },
         });
 
         if (!result.ok) {
-          send("error", { error: result.error ?? "Agent failed." });
+          const err = result.error ?? "Agent failed.";
+          send("error", { error: err });
+          await finalizeJob("failed", { error: err });
           close();
           return;
         }
@@ -172,11 +259,16 @@ export async function POST(request: NextRequest) {
 
         if (rows.length > 0) {
           send("inserting", { generated: rows.length });
+          await updateJob({
+            step_label: `Saving ${rows.length} idea${rows.length === 1 ? "" : "s"}…`,
+          });
           const { error: insertErr } = await supabase
             .from("video_ideas")
             .insert(rows);
           if (insertErr) {
-            send("error", { error: `Insert failed: ${insertErr.message}` });
+            const err = `Insert failed: ${insertErr.message}`;
+            send("error", { error: err });
+            await finalizeJob("failed", { error: err });
             close();
             return;
           }
@@ -187,11 +279,15 @@ export async function POST(request: NextRequest) {
           pending: (pendingCount ?? 0) + rows.length,
           tokens: result.tokens,
         });
+        await finalizeJob("done", {
+          generated_count: rows.length,
+          step_label: `Generated ${rows.length} new idea${rows.length === 1 ? "" : "s"}.`,
+        });
         close();
       } catch (err) {
-        send("error", {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        const msg = err instanceof Error ? err.message : String(err);
+        send("error", { error: msg });
+        await finalizeJob("failed", { error: msg });
         close();
       }
     },
@@ -202,8 +298,6 @@ export async function POST(request: NextRequest) {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
-      // Disable Vercel/Next response buffering — without this the
-      // stream gets batched and the UI sees no updates until the end.
       "X-Accel-Buffering": "no",
     },
   });

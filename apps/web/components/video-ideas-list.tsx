@@ -64,6 +64,14 @@ export type IdeasAccount = {
   providerAccountId: string;
 };
 
+export type ActiveGenerationJob = {
+  id: string;
+  step_count: number;
+  step_label: string;
+  requested_count: number | null;
+  started_at: string;
+};
+
 type KindFilter = "all" | VideoIdeaRow["kind"];
 
 const KIND_LABELS: Record<VideoIdeaRow["kind"], string> = {
@@ -116,11 +124,13 @@ export function VideoIdeasList({
   selectedAccountId,
   initial,
   targetCount,
+  initialActiveJob,
 }: {
   accounts: IdeasAccount[];
   selectedAccountId: string | null;
   initial: VideoIdeaRow[];
   targetCount: number;
+  initialActiveJob?: ActiveGenerationJob | null;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -134,14 +144,102 @@ export function VideoIdeasList({
     setTarget(targetCount);
   }, [targetCount]);
   const [filter, setFilter] = useState<KindFilter>("all");
-  const [refreshing, setRefreshing] = useState(false);
+  // Track whether a generation is in flight either because we just
+  // started it via SSE, or because the page loaded with an active job
+  // already running server-side (user navigated away and came back).
+  const [refreshing, setRefreshing] = useState(!!initialActiveJob);
+  const [activeJobId, setActiveJobId] = useState<string | null>(
+    initialActiveJob?.id ?? null,
+  );
   const [progress, setProgress] = useState<{
     count: number;
     label: string;
-  } | null>(null);
+  } | null>(
+    initialActiveJob
+      ? {
+          count: initialActiveJob.step_count,
+          label: initialActiveJob.step_label,
+        }
+      : null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [savingTarget, setSavingTarget] = useState(false);
+
+  // Poll the job row while a generation is active. This is the safety
+  // net for the SSE stream — if the user navigates away and back, the
+  // stream is dead but the job keeps updating, so polling catches us
+  // up. Stops as soon as the job hits a final state.
+  useEffect(() => {
+    if (!activeJobId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function poll() {
+      if (cancelled || !activeJobId) return;
+      try {
+        const res = await fetch(`/api/video-ideas/jobs/${activeJobId}`);
+        if (cancelled) return;
+        if (!res.ok) {
+          // 404 / 500 etc — give up polling and reset UI state.
+          setRefreshing(false);
+          setActiveJobId(null);
+          setProgress(null);
+          return;
+        }
+        const json = (await res.json()) as {
+          job?: {
+            status: "running" | "done" | "failed";
+            step_count: number;
+            step_label: string | null;
+            generated_count: number | null;
+            error: string | null;
+          };
+        };
+        const job = json.job;
+        if (!job) {
+          setRefreshing(false);
+          setActiveJobId(null);
+          setProgress(null);
+          return;
+        }
+        setProgress({
+          count: job.step_count,
+          label: job.step_label ?? "Working…",
+        });
+        if (job.status === "done") {
+          setRefreshing(false);
+          setActiveJobId(null);
+          setProgress(null);
+          const generated = job.generated_count ?? 0;
+          setMessage(
+            generated > 0
+              ? `Generated ${generated} new idea${generated === 1 ? "" : "s"}.`
+              : "Already at target.",
+          );
+          router.refresh();
+          return;
+        }
+        if (job.status === "failed") {
+          setRefreshing(false);
+          setActiveJobId(null);
+          setProgress(null);
+          setError(job.error ?? "Generation failed.");
+          return;
+        }
+        timer = setTimeout(poll, 2500);
+      } catch {
+        if (cancelled) return;
+        timer = setTimeout(poll, 3500);
+      }
+    }
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [activeJobId, router]);
   const [detailIdeaId, setDetailIdeaId] = useState<string | null>(null);
   const detailIdea = useMemo(
     () => ideas.find((i) => i.id === detailIdeaId) ?? null,
@@ -233,14 +331,38 @@ export function VideoIdeasList({
     setError(null);
     setMessage(null);
     setProgress({ count: 0, label: "Starting…" });
+    // localSseDone tracks whether the SSE stream itself reached a
+    // terminal event. If the user navigates away the stream gets cut
+    // off and we fall through to the polling effect (which kicks in
+    // because activeJobId is still set).
+    let localSseDone = false;
     try {
       const res = await fetch("/api/video-ideas/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integration_id: selectedAccountId }),
       });
+      if (res.status === 409) {
+        // Another run is already going for this account — adopt its
+        // id and let the polling effect track it.
+        const json = (await res.json().catch(() => ({}))) as {
+          job_id?: string;
+          error?: string;
+        };
+        if (json.job_id) {
+          setActiveJobId(json.job_id);
+          setProgress({ count: 0, label: "Resuming generation…" });
+        } else {
+          setError(json.error ?? "A generation is already running.");
+          setRefreshing(false);
+          setProgress(null);
+        }
+        return;
+      }
       if (!res.ok || !res.body) {
         setError(`Refresh failed (${res.status}).`);
+        setRefreshing(false);
+        setProgress(null);
         return;
       }
 
@@ -274,7 +396,13 @@ export function VideoIdeasList({
           } catch {
             continue;
           }
-          if (evtType === "prepare") {
+          if (evtType === "job") {
+            // Server returned the job row id — set it so the polling
+            // effect can fall back to status checks if SSE drops.
+            if (typeof payload.id === "string") {
+              setActiveJobId(payload.id);
+            }
+          } else if (evtType === "prepare") {
             setProgress({ count: 0, label: String(payload.label ?? "Working…") });
           } else if (evtType === "step") {
             setProgress({
@@ -287,6 +415,7 @@ export function VideoIdeasList({
               label: "Saving ideas to your library…",
             });
           } else if (evtType === "done") {
+            localSseDone = true;
             const generated = Number(payload.generated ?? 0);
             if (generated > 0) {
               finalMessage = `Generated ${generated} new idea${generated === 1 ? "" : "s"}.`;
@@ -297,23 +426,39 @@ export function VideoIdeasList({
                   : "Already at target.";
             }
           } else if (evtType === "error") {
+            localSseDone = true;
             setError(
               typeof payload.error === "string"
                 ? payload.error
                 : "Refresh failed.",
             );
+            setRefreshing(false);
+            setActiveJobId(null);
+            setProgress(null);
             return;
           }
         }
       }
 
-      if (finalMessage) setMessage(finalMessage);
-      router.refresh();
+      if (localSseDone) {
+        if (finalMessage) setMessage(finalMessage);
+        router.refresh();
+        setRefreshing(false);
+        setActiveJobId(null);
+        setProgress(null);
+      }
+      // If the stream ended without a done/error frame (e.g. tab was
+      // backgrounded and reconnected), leave refreshing + activeJobId
+      // set — the polling effect will take over from here.
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRefreshing(false);
-      setProgress(null);
+      // Network drop / abort — keep refreshing flag so the polling
+      // effect (activeJobId-driven) continues to surface progress.
+      // If we never even got a job id, fall back to error.
+      if (!activeJobId) {
+        setError(err instanceof Error ? err.message : String(err));
+        setRefreshing(false);
+        setProgress(null);
+      }
     }
   }
 
