@@ -163,6 +163,11 @@ export async function POST(request: NextRequest) {
           hashtags: (idea.hashtags ?? []).map((h) => h.replace(/^#/, "")),
           cta: idea.cta ?? null,
           visual_notes: idea.visual_notes ?? null,
+          optimal_post_window: idea.optimal_post_window ?? null,
+          suggested_duration: idea.suggested_duration ?? null,
+          thumbnail_concept: idea.thumbnail_concept ?? null,
+          engagement_hook: idea.engagement_hook ?? null,
+          trending_sound: idea.trending_sound ?? null,
         }));
 
         if (rows.length > 0) {

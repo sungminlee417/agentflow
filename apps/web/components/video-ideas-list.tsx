@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Modal } from "@/components/modal";
 import { MarkDoneModal } from "@/components/mark-done-modal";
+import { QuickAddIdea } from "@/components/quick-add-idea";
 
 export type VideoIdeaRow = {
   id: string;
@@ -25,6 +26,11 @@ export type VideoIdeaRow = {
   hashtags: string[] | null;
   cta: string | null;
   visual_notes: string | null;
+  optimal_post_window: string | null;
+  suggested_duration: string | null;
+  thumbnail_concept: string | null;
+  engagement_hook: string | null;
+  trending_sound: string | null;
   posted_video_id: string | null;
   posted_video_url: string | null;
   posted_at: string | null;
@@ -535,6 +541,12 @@ export function VideoIdeasList({
         )}
       </div>
 
+      {view === "pending" && (
+        <div className="mt-4">
+          <QuickAddIdea selectedAccountId={selectedAccountId} />
+        </div>
+      )}
+
       <section className="mt-6 space-y-3">
         {filtered.length === 0 && (
           <div className="rounded-lg border border-dashed border-neutral-300 px-4 py-10 text-center text-sm text-neutral-500 dark:border-neutral-700">
@@ -605,6 +617,7 @@ export function VideoIdeasList({
                 </p>
               )}
               <SourceRefs refs={i.source_refs} />
+              <ViralityStrip i={i} />
               {i.status === "done" && (
                 <PerformanceBlock
                   i={i}
@@ -784,6 +797,52 @@ function IdeaDetailModal({
             <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-neutral-50 px-3 py-3 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
               {idea.visual_notes}
             </pre>
+          </Section>
+        )}
+
+        {(idea.optimal_post_window ||
+          idea.suggested_duration ||
+          idea.thumbnail_concept ||
+          idea.engagement_hook ||
+          idea.trending_sound) && (
+          <Section title="Virality plan">
+            <div className="space-y-2 rounded-md bg-neutral-50 px-3 py-3 text-xs dark:bg-neutral-900">
+              {idea.optimal_post_window && (
+                <ViralityRow
+                  icon="🕒"
+                  label="When to post"
+                  value={idea.optimal_post_window}
+                />
+              )}
+              {idea.suggested_duration && (
+                <ViralityRow
+                  icon="⏱"
+                  label="Target length"
+                  value={idea.suggested_duration}
+                />
+              )}
+              {idea.thumbnail_concept && (
+                <ViralityRow
+                  icon="🖼"
+                  label="Cover / first frame"
+                  value={idea.thumbnail_concept}
+                />
+              )}
+              {idea.engagement_hook && (
+                <ViralityRow
+                  icon="💬"
+                  label="Comment-driver"
+                  value={idea.engagement_hook}
+                />
+              )}
+              {idea.trending_sound && (
+                <ViralityRow
+                  icon="🎵"
+                  label="Sound"
+                  value={idea.trending_sound}
+                />
+              )}
+            </div>
           </Section>
         )}
 
@@ -1004,6 +1063,63 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
         {value}
       </div>
+    </div>
+  );
+}
+
+function ViralityRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="mt-0.5 shrink-0 text-sm leading-none">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+          {label}
+        </div>
+        <div className="text-xs text-neutral-800 dark:text-neutral-200">
+          {value}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ViralityStrip({ i }: { i: VideoIdeaRow }) {
+  const chips: { icon: string; label: string }[] = [];
+  if (i.optimal_post_window) {
+    chips.push({ icon: "🕒", label: i.optimal_post_window });
+  }
+  if (i.suggested_duration) {
+    chips.push({ icon: "⏱", label: i.suggested_duration });
+  }
+  if (i.trending_sound) {
+    chips.push({
+      icon: "🎵",
+      label:
+        i.trending_sound.length > 50
+          ? i.trending_sound.slice(0, 50) + "…"
+          : i.trending_sound,
+    });
+  }
+  if (chips.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {chips.map((c, idx) => (
+        <span
+          key={idx}
+          className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+        >
+          <span>{c.icon}</span>
+          <span>{c.label}</span>
+        </span>
+      ))}
     </div>
   );
 }

@@ -63,7 +63,7 @@ export default async function VideoIdeasPage({
       supabase
         .from("video_ideas")
         .select(
-          "id, provider, integration_id, title, hook, format, rationale, kind, source_refs, expires_at, status, created_at, script, post_title, description, hashtags, cta, visual_notes, posted_video_id, posted_video_url, posted_at, performance_verdict, performance_score, performance_review, performance_stats, last_reviewed_at, next_review_at",
+          "id, provider, integration_id, title, hook, format, rationale, kind, source_refs, expires_at, status, created_at, script, post_title, description, hashtags, cta, visual_notes, optimal_post_window, suggested_duration, thumbnail_concept, engagement_hook, trending_sound, posted_video_id, posted_video_url, posted_at, performance_verdict, performance_score, performance_review, performance_stats, last_reviewed_at, next_review_at",
         )
         .eq("user_id", user.id)
         .eq("integration_id", selectedAccountId)

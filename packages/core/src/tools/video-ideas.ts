@@ -7,6 +7,10 @@ import {
   saveReview,
   extractTikTokVideoId,
 } from "../agents/video-review-agent";
+import {
+  runEvaluateIdea,
+  persistEvaluatedIdea,
+} from "../agents/evaluate-idea-agent";
 
 // Video-ideas CRUD tools for the chat agent.
 //
@@ -125,6 +129,11 @@ export function buildVideoIdeasTools(
         hashtags: z.array(z.string()).nullish(),
         cta: z.string().nullish(),
         visual_notes: z.string().nullish(),
+        optimal_post_window: z.string().nullish(),
+        suggested_duration: z.string().nullish(),
+        thumbnail_concept: z.string().nullish(),
+        engagement_hook: z.string().nullish(),
+        trending_sound: z.string().nullish(),
       }),
       execute: async (args) => {
         const { data: integ } = await supabase
@@ -163,6 +172,11 @@ export function buildVideoIdeasTools(
             hashtags: normalizeHashtags(args.hashtags),
             cta: args.cta ?? null,
             visual_notes: args.visual_notes ?? null,
+            optimal_post_window: args.optimal_post_window ?? null,
+            suggested_duration: args.suggested_duration ?? null,
+            thumbnail_concept: args.thumbnail_concept ?? null,
+            engagement_hook: args.engagement_hook ?? null,
+            trending_sound: args.trending_sound ?? null,
           })
           .select("id")
           .single();
@@ -187,6 +201,11 @@ export function buildVideoIdeasTools(
         hashtags: z.array(z.string()).nullish(),
         cta: z.string().nullish(),
         visual_notes: z.string().nullish(),
+        optimal_post_window: z.string().nullish(),
+        suggested_duration: z.string().nullish(),
+        thumbnail_concept: z.string().nullish(),
+        engagement_hook: z.string().nullish(),
+        trending_sound: z.string().nullish(),
       }),
       execute: async ({ id, ...fields }) => {
         const patch: Record<string, unknown> = {};
@@ -286,6 +305,45 @@ export function buildVideoIdeasTools(
           error: error?.message,
           posted_video_id: videoId,
           next_review_at: nextReview.toISOString(),
+        };
+      },
+    }),
+
+    video_ideas_evaluate: tool({
+      description:
+        "Evaluate a raw idea spark the user has typed (e.g. 'what if I do left-handed guitars?'). Pulls the creator's top performers + recent voice + niche context, returns a harsh-but-helpful verdict: 'add' (fits the pattern, fully fleshed idea returned), 'needs_work' (has potential but needs reframing — partial idea + specific reframing), or 'pass' (off-niche or contradicts what works — specific reason). Use when the user pitches you an idea in chat. If verdict is 'add' and add_if_good=true, the idea is inserted into the library automatically.",
+      inputSchema: z.object({
+        integration_id: z.string().uuid(),
+        text: z.string().min(3),
+        add_if_good: z.boolean().default(true),
+      }),
+      execute: async ({ integration_id, text, add_if_good }) => {
+        const result = await runEvaluateIdea({
+          supabase,
+          userId,
+          integrationId: integration_id,
+          rawIdea: text,
+        });
+        if (!result.ok) return { ok: false, error: result.error };
+        let added_id: string | undefined;
+        if (add_if_good && result.verdict === "add" && result.idea) {
+          const persisted = await persistEvaluatedIdea(
+            supabase,
+            userId,
+            integration_id,
+            result.idea,
+          );
+          if (!persisted.ok) {
+            return { ok: false, error: persisted.error };
+          }
+          added_id = persisted.id;
+        }
+        return {
+          ok: true,
+          verdict: result.verdict,
+          reasoning: result.reasoning,
+          idea: result.idea,
+          added_id,
         };
       },
     }),

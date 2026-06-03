@@ -40,6 +40,18 @@ export type GeneratedIdea = {
   cta?: string;
   /** Notes on visuals, transitions, on-screen text, B-roll. */
   visual_notes?: string;
+  // Virality-tuning fields:
+  /** When to post for best reach ("Tue-Thu 7-9pm local"). */
+  optimal_post_window?: string;
+  /** Recommended length range ("18-25s"). */
+  suggested_duration?: string;
+  /** What the first frame should be — TikTok shows it as the cover. */
+  thumbnail_concept?: string;
+  /** Specific element designed to drive comments (distinct from the
+   *  opening hook, which is about stopping the scroll). */
+  engagement_hook?: string;
+  /** Trending TikTok sound to use, if one fits. */
+  trending_sound?: string;
 };
 
 export type VideoIdeasResult = {
@@ -63,6 +75,11 @@ const IDEA_SCHEMA = z.object({
   hashtags: z.array(z.string()).nullish(),
   cta: z.string().nullish(),
   visual_notes: z.string().nullish(),
+  optimal_post_window: z.string().nullish(),
+  suggested_duration: z.string().nullish(),
+  thumbnail_concept: z.string().nullish(),
+  engagement_hook: z.string().nullish(),
+  trending_sound: z.string().nullish(),
 });
 
 // Accept either { ideas: [...] } or a bare [...].
@@ -140,6 +157,8 @@ Required procedure:
 2. tiktok_list_my_videos (max_count 20) — most recent 20 uploads. This tells you the creator's CURRENT voice / pacing / topic focus, even if recent videos haven't all popped. Match scripts to this voice.
 3. Cross-reference: the patterns in the top 10 are what works for this audience; the recent 20 is how this creator currently sounds. Your ideas should hit the top-10 patterns delivered in the recent-20 voice.
 4. Extract the creator's most-used hashtags from the top performers.
+4b. TIMING SIGNAL: from the top 10 performers' create_time values, note the day-of-week + hour patterns (convert from unix seconds to UTC, then state the assumption that the creator's audience is roughly in their own timezone). This becomes the basis for each idea's optimal_post_window.
+4c. AUDIO/SOUND: scan the top performers for music_meta or recurring audio. If the creator has a winning sound pattern (original audio vs trending), capture it.
 ${hasApify ? `5. For each of the top 2-3 hashtags, tiktok_search_hashtag (limit 15). From the results: (a) note what's trending right now, (b) collect 3-5 distinct authors (NOT the user) who consistently post in this niche — these are auto-discovered competitors.
 6. For 1-2 of those competitor handles, tiktok_get_profile (videos_limit 10) to surface songs/formats they covered well that the user hasn't.
 7. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.` : `5. Skip Apify-backed competitor + trend discovery (not configured). Lean harder on pattern + seasonal kinds.
@@ -198,6 +217,14 @@ Upload-ready content for EVERY idea — the creator should be able to record + p
 - cta: one explicit ask in a single sentence ("Comment 'nylon' or 'steel' below 👇").
 - visual_notes: 4-6 short bullets covering things NOT already in the script blocks — overall lighting setup, framing (close-up vs wide), props/wardrobe, B-roll inserts, color grade, anything specific to your shooting setup. Plain text, "• " prefix per bullet.
 
+Virality fields — fill ALL of these for every idea (these are the levers that actually move reach):
+
+- optimal_post_window: human-readable day-of-week + hour range to post for best reach, derived from step 4b. Format: "Tue-Thu 7-9pm local time". If you don't have strong signal from the top performers, state your best guess + the caveat: "Mon-Wed 6-9pm local time (limited signal from top videos)".
+- suggested_duration: recommended length window in seconds for THIS idea's format. Comparison/demo formats often work at 18-25s; tutorial deep-dives at 35-50s; teaser hooks at 7-12s. Match it to what the top performers in the creator's catalog use for the same format.
+- thumbnail_concept: ONE sentence describing what the first frame (= the cover shown in the For You feed) should look like. Be visual: "Tight close-up of two guitar headstocks side by side, big white text 'WHICH SOUNDS BETTER?' across the top." This is as important as the hook for getting tapped in feed.
+- engagement_hook: a SPECIFIC element designed to drive COMMENTS (distinct from the opening hook which is about stopping the scroll). E.g. "Hold the final note 2s longer on one option than the other so viewers have to comment which one they liked more." Or "Phrase the on-screen text as a question viewers can answer in one word."
+- trending_sound: if a specific TikTok sound (original audio creator + song name, ideally with the sound id or URL) is currently trending in the niche AND fits this idea, name it explicitly: "@username's 'Song Title' (sound id: 1234...) — viral in #fingerstyle the past 2 weeks." If none is appropriate, set this to null. NEVER invent a sound that didn't come from a tool result.
+
 Return ONLY a JSON object {ideas: [...]} matching the schema below. No commentary, no markdown, no code fence.
 
 JSON schema for the final response:
@@ -216,7 +243,12 @@ JSON schema for the final response:
       "description": string,
       "hashtags": [string, ...],     // no leading '#'
       "cta": string,
-      "visual_notes": string
+      "visual_notes": string,
+      "optimal_post_window": string, // "Tue-Thu 7-9pm local"
+      "suggested_duration": string,  // "18-25s"
+      "thumbnail_concept": string,
+      "engagement_hook": string,
+      "trending_sound": string | null
     }
   ]
 }
