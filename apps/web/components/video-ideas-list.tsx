@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Modal } from "@/components/modal";
 import { MarkDoneModal } from "@/components/mark-done-modal";
 import { QuickAddIdea } from "@/components/quick-add-idea";
+import { AccountPreferences } from "@/components/account-preferences";
 
 export type VideoIdeaRow = {
   id: string;
@@ -124,12 +125,14 @@ export function VideoIdeasList({
   selectedAccountId,
   initial,
   targetCount,
+  preferences,
   initialActiveJob,
 }: {
   accounts: IdeasAccount[];
   selectedAccountId: string | null;
   initial: VideoIdeaRow[];
   targetCount: number;
+  preferences?: string | null;
   initialActiveJob?: ActiveGenerationJob | null;
 }) {
   const router = useRouter();
@@ -730,7 +733,11 @@ export function VideoIdeasList({
       </div>
 
       {view === "pending" && (
-        <div className="mt-4">
+        <div className="mt-4 space-y-3">
+          <AccountPreferences
+            selectedAccountId={selectedAccountId}
+            initial={preferences ?? null}
+          />
           <QuickAddIdea selectedAccountId={selectedAccountId} />
         </div>
       )}

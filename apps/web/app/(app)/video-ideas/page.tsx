@@ -59,6 +59,7 @@ export default async function VideoIdeasPage({
 
   let ideas: VideoIdeaRow[] = [];
   let targetCount = 10;
+  let preferences: string | null = null;
   let activeJob: ActiveGenerationJob | null = null;
   if (selectedAccountId) {
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
@@ -74,7 +75,7 @@ export default async function VideoIdeasPage({
           .order("created_at", { ascending: false }),
         supabase
           .from("video_ideas_settings")
-          .select("target_count")
+          .select("target_count, preferences")
           .eq("user_id", user.id)
           .eq("integration_id", selectedAccountId)
           .maybeSingle(),
@@ -93,6 +94,7 @@ export default async function VideoIdeasPage({
       ]);
     ideas = (ideasData ?? []) as VideoIdeaRow[];
     targetCount = settings?.target_count ?? 10;
+    preferences = (settings?.preferences as string | null | undefined) ?? null;
     if (jobRow) {
       activeJob = {
         id: jobRow.id as string,
@@ -110,6 +112,7 @@ export default async function VideoIdeasPage({
       selectedAccountId={selectedAccountId}
       initial={ideas}
       targetCount={targetCount}
+      preferences={preferences}
       initialActiveJob={activeJob}
     />
   );

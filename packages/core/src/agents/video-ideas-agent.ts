@@ -136,11 +136,20 @@ function reviewsBlock(reviews: RecentReview[]): string {
   return lines.join("\n");
 }
 
+function preferencesBlock(preferences: string | null): string {
+  if (!preferences || !preferences.trim()) return "";
+  return `
+
+CREATOR PREFERENCES / HARD CONSTRAINTS (must respect for every idea — ideas that violate these are an automatic skip):
+${preferences.trim()}`;
+}
+
 function tiktokPrompt(
   count: number,
   today: string,
   connected: string[],
   recentReviews: RecentReview[] = [],
+  preferences: string | null = null,
 ): string {
   const hasApify = connected.includes("apify");
   const hasReviews = recentReviews.length > 0;
@@ -150,7 +159,7 @@ Today is ${today}.
 
 Available tools:
 ${describeAvailable(connected)}
-${reviewsBlock(recentReviews)}
+${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
 
 Required procedure:
 1. tiktok_top_my_videos (top_n 10, from_history 100) — these are the creator's lifetime best by engagement rate (likes ÷ views), pulled across their last ~100 uploads. This tells you what their audience actually rewards, not just what they posted recently.
@@ -368,8 +377,29 @@ export async function runVideoIdeasAgent({
     console.error("[video-ideas-agent] failed to load recent reviews:", err);
   }
 
+  // Per-account preferences (free-text constraints the creator set).
+  let preferences: string | null = null;
+  try {
+    const { data: settingsRow } = await supabase
+      .from("video_ideas_settings")
+      .select("preferences")
+      .eq("user_id", userId)
+      .eq("integration_id", integrationId)
+      .maybeSingle();
+    preferences =
+      (settingsRow?.preferences as string | null | undefined) ?? null;
+  } catch (err) {
+    console.error("[video-ideas-agent] failed to load preferences:", err);
+  }
+
   const today = new Date().toISOString().slice(0, 10);
-  const system = tiktokPrompt(count, today, connected, recentReviews);
+  const system = tiktokPrompt(
+    count,
+    today,
+    connected,
+    recentReviews,
+    preferences,
+  );
 
   let stepCount = 0;
   try {

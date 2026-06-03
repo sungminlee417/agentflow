@@ -67,13 +67,22 @@ function buildPrompt(args: {
   rawIdea: string;
   today: string;
   hasApify: boolean;
+  preferences: string | null;
 }): string {
+  const prefBlock =
+    args.preferences && args.preferences.trim()
+      ? `
+
+CREATOR PREFERENCES / HARD CONSTRAINTS (an idea that violates any of these is an automatic "pass", regardless of niche fit):
+${args.preferences.trim()}`
+      : "";
+
   return `You evaluate raw video-idea sparks the creator types in, and decide whether they fit. Your job is harsh-but-helpful filtering: most ideas should NOT make it into the library; only ones the creator's audience would actually reward should.
 
 Today is ${args.today}.
 
 User's raw idea spark:
-"${args.rawIdea}"
+"${args.rawIdea}"${prefBlock}
 
 Required procedure:
 1. tiktok_top_my_videos (top_n 10, from_history 100) — what hits for this creator.
@@ -201,11 +210,27 @@ export async function runEvaluateIdea({
     return { ok: false, error: "TikTok integration not connected." };
   }
 
+  // Per-account preferences (free-text constraints).
+  let preferences: string | null = null;
+  try {
+    const { data: settingsRow } = await supabase
+      .from("video_ideas_settings")
+      .select("preferences")
+      .eq("user_id", userId)
+      .eq("integration_id", integrationId)
+      .maybeSingle();
+    preferences =
+      (settingsRow?.preferences as string | null | undefined) ?? null;
+  } catch (err) {
+    console.error("[evaluate-idea-agent] failed to load preferences:", err);
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   const system = buildPrompt({
     rawIdea: trimmed,
     today,
     hasApify: connected.includes("apify"),
+    preferences,
   });
 
   try {
