@@ -52,9 +52,19 @@ export async function getFreshAccessToken(
       ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
       : null;
 
-    // Scope the update by integration id when we have it — multiple
-    // accounts may exist for the same (user, provider) now.
-    let updateQuery = supabase
+    // Scope the update by integration id. Without an id this would
+    // write to every (user, provider) row — cross-contaminating
+    // tokens between accounts whenever the user has more than one.
+    // We refuse the update rather than risk corruption: the refreshed
+    // token is still returned to the caller, just not persisted, and
+    // the next refresh cycle will retry.
+    if (!row.id) {
+      console.error(
+        `[oauth-refresh] ${provider} for ${userId}: row.id missing — not persisting refreshed token to avoid cross-account contamination`,
+      );
+      return refreshed.access_token;
+    }
+    await supabase
       .from("integrations")
       .update({
         encrypted_access_token: encrypt(refreshed.access_token),
@@ -65,9 +75,7 @@ export async function getFreshAccessToken(
         updated_at: new Date().toISOString(),
       })
       .eq("user_id", userId)
-      .eq("provider", provider);
-    if (row.id) updateQuery = updateQuery.eq("id", row.id);
-    await updateQuery;
+      .eq("id", row.id);
 
     return refreshed.access_token;
   } catch (err) {

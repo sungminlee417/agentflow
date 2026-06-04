@@ -78,6 +78,11 @@ export async function buildToolsForIntegrations(
       const provider = i.provider;
       const token = REFRESHABLE_PROVIDERS.has(provider as OAuthProvider)
         ? await getFreshAccessToken(supabase, userId, provider as OAuthProvider, {
+            // The id is what scopes the post-refresh UPDATE to THIS
+            // row. Without it the refresh writes the new token into
+            // every integration the user has for the provider, which
+            // cross-contaminates accounts when multiple are connected.
+            id: i.id,
             encrypted_access_token: i.encrypted_access_token,
             encrypted_refresh_token: i.encrypted_refresh_token,
             expires_at: i.expires_at,
