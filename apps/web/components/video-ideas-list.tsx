@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   DndContext,
@@ -194,6 +194,40 @@ export function VideoIdeasList({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [savingTarget, setSavingTarget] = useState(false);
+
+  // Abort controller for the in-flight SSE request from /api/video-ideas/
+  // refresh. Lives in a ref so account-switching can reach in and cancel
+  // it — without this, the dead stream from the previous account keeps
+  // pushing progress / done / error events into the current account's
+  // view, and "Generated N ideas" banners get attributed to the wrong
+  // selection.
+  const refreshAbortRef = useRef<AbortController | null>(null);
+
+  // When the user switches accounts mid-generation, cut everything tied
+  // to the previous account: kill the SSE fetch, drop the job-poll
+  // identity, clear the progress card / banners. The polling effect
+  // keys on activeJobId, so setting it to null naturally stops the
+  // 2.5s loop without needing to touch it directly.
+  useEffect(() => {
+    refreshAbortRef.current?.abort();
+    refreshAbortRef.current = null;
+    setActiveJobId(initialActiveJob?.id ?? null);
+    setRefreshing(!!initialActiveJob);
+    setProgress(
+      initialActiveJob
+        ? {
+            count: initialActiveJob.step_count,
+            label: initialActiveJob.step_label,
+          }
+        : null,
+    );
+    setMessage(null);
+    setError(null);
+    // We intentionally re-run on selectedAccountId AND on the server-
+    // provided initialActiveJob — that pair fully describes "which
+    // account, with which active job (if any)" the page is for now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccountId, initialActiveJob?.id]);
 
   // Poll the job row while a generation is active. This is the safety
   // net for the SSE stream — if the user navigates away and back, the
@@ -454,11 +488,22 @@ export function VideoIdeasList({
     // off and we fall through to the polling effect (which kicks in
     // because activeJobId is still set).
     let localSseDone = false;
+    // Lock the integration id this refresh is for. If the user
+    // switches accounts mid-stream we'll detect a mismatch and ignore
+    // late events — protects against the previous account's stream
+    // writing into the new account's view.
+    const refreshIntegrationId = selectedAccountId;
+    // Abort any previous in-flight refresh and install a new
+    // controller. Stored in a ref so account-switching can cancel it.
+    refreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
     try {
       const res = await fetch("/api/video-ideas/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integration_id: selectedAccountId }),
+        signal: controller.signal,
       });
       if (res.status === 409) {
         // Another run is already going for this account — adopt its
@@ -495,12 +540,16 @@ export function VideoIdeasList({
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (controller.signal.aborted) return;
         buffer += decoder.decode(value, { stream: true });
 
         let nl: number;
         while ((nl = buffer.indexOf("\n\n")) !== -1) {
           const frame = buffer.slice(0, nl);
           buffer = buffer.slice(nl + 2);
+          // Refuse to write into state if the user has since switched
+          // accounts — this stream is for the old integration.
+          if (refreshIntegrationId !== selectedAccountId) continue;
           let evtType = "message";
           let dataStr = "";
           for (const line of frame.split("\n")) {
@@ -558,6 +607,11 @@ export function VideoIdeasList({
         }
       }
 
+      // If the user switched accounts during the stream, suppress
+      // everything that came from the old integration's run. Polling
+      // for it has already been cancelled by the account-switch
+      // effect.
+      if (refreshIntegrationId !== selectedAccountId) return;
       if (localSseDone) {
         if (finalMessage) setMessage(finalMessage);
         router.refresh();
@@ -569,9 +623,17 @@ export function VideoIdeasList({
       // backgrounded and reconnected), leave refreshing + activeJobId
       // set — the polling effect will take over from here.
     } catch (err) {
-      // Network drop / abort — keep refreshing flag so the polling
-      // effect (activeJobId-driven) continues to surface progress.
-      // If we never even got a job id, fall back to error.
+      // AbortError fires when the user switched accounts (we cancelled
+      // the request) — that's expected, not an error to show.
+      const aborted =
+        err instanceof DOMException && err.name === "AbortError";
+      if (aborted) return;
+      // Don't surface state for a stream that's no longer for the
+      // active account.
+      if (refreshIntegrationId !== selectedAccountId) return;
+      // Network drop — keep refreshing flag so the polling effect
+      // (activeJobId-driven) continues to surface progress. If we
+      // never even got a job id, fall back to error.
       if (!activeJobId) {
         setError(err instanceof Error ? err.message : String(err));
         setRefreshing(false);
