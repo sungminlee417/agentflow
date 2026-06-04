@@ -1,5 +1,10 @@
+import type { Metadata } from "next";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { ActivityFeed, type AutomationSummary, type RunRow } from "@/components/activity-feed";
+
+export const metadata: Metadata = {
+  title: "Activity",
+};
 
 export default async function ActivityPage() {
   const supabase = await createSupabaseServerClient();

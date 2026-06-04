@@ -1,6 +1,24 @@
+import type { Metadata } from "next";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import { ChatView, type StoredMessage } from "@/components/chat-view";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const supabase = await createSupabaseServerClient();
+  const { data: convo } = await supabase
+    .from("conversations")
+    .select("title")
+    .eq("id", id)
+    .maybeSingle();
+  return {
+    title: convo?.title?.slice(0, 60) ?? "Chat",
+  };
+}
 
 export default async function ConversationPage({
   params,

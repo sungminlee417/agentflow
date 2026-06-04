@@ -1,7 +1,20 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getManager } from "@agentflow/core";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const manager = getManager(slug);
+  return {
+    title: manager?.label ?? "Manager",
+  };
+}
 import {
   AutomationsSection,
   type AutomationRow,

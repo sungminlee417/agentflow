@@ -1,8 +1,13 @@
+import type { Metadata } from "next";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   getOAuthCredentials,
   type OAuthProvider,
 } from "@agentflow/core";
+
+export const metadata: Metadata = {
+  title: "Integrations",
+};
 import {
   IntegrationsHub,
   type IntegrationAddon,

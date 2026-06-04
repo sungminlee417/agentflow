@@ -1,7 +1,12 @@
+import type { Metadata } from "next";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { PROVIDERS } from "@agentflow/core";
 import { ApiKeyForm } from "@/components/api-key-form";
 import { ThemeToggle } from "@/components/theme-toggle";
+
+export const metadata: Metadata = {
+  title: "Settings",
+};
 
 export default async function SettingsPage() {
   const supabase = await createSupabaseServerClient();

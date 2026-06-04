@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   VideoIdeasList,
@@ -5,6 +6,10 @@ import {
   type IdeasAccount,
   type ActiveGenerationJob,
 } from "@/components/video-ideas-list";
+
+export const metadata: Metadata = {
+  title: "Video ideas",
+};
 
 // Only providers that the video-ideas agent currently supports.
 const SUPPORTED_PROVIDERS = new Set(["tiktok"]);
