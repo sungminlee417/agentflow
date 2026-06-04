@@ -36,33 +36,71 @@ export type EvaluationResult = {
   error?: string;
 };
 
-const EVALUATION_SCHEMA = z.object({
-  verdict: z.enum(["add", "needs_work", "pass"]),
-  reasoning: z.string(),
-  idea: z
-    .object({
-      title: z.string(),
-      hook: z.string().nullish(),
-      format: z.string().nullish(),
-      rationale: z.string().nullish(),
-      kind: z.enum(["pattern", "trend", "rising", "competitor", "seasonal"]),
-      source_refs: z.record(z.string(), z.unknown()).nullish(),
-      hard_date: z.string().nullish(),
-      script: z.string().nullish(),
-      post_title: z.string().nullish(),
-      description: z.string().nullish(),
-      hashtags: z.array(z.string()).nullish(),
-      cta: z.string().nullish(),
-      visual_notes: z.string().nullish(),
-      optimal_post_window: z.string().nullish(),
-      suggested_duration: z.string().nullish(),
-      thumbnail_concept: z.string().nullish(),
-      engagement_hook: z.string().nullish(),
-      trending_sound: z.string().nullish(),
-      saturation_warning: z.string().nullish(),
-    })
-    .nullish(),
-});
+// Soft schema for "graceful degradation": when the strict schema fails
+// (e.g. model added an unexpected field or skipped a required one in
+// the nested idea), we fall back to extracting just verdict + reasoning.
+// That's enough to tell the user "needs work / pass" with the model's
+// explanation, even if we can't auto-insert.
+const EVALUATION_SOFT_SCHEMA = z
+  .object({
+    verdict: z.enum(["add", "needs_work", "pass"]),
+    reasoning: z.string().min(1),
+  })
+  .passthrough();
+
+const EVALUATION_SCHEMA = z
+  .object({
+    verdict: z.enum(["add", "needs_work", "pass"]),
+    reasoning: z.string(),
+    idea: z
+      .object({
+        title: z.string(),
+        hook: z.string().nullish(),
+        format: z.string().nullish(),
+        rationale: z.string().nullish(),
+        // Be permissive on `kind` — the model occasionally invents
+        // adjacent labels (e.g. "rising_trend" instead of "rising").
+        // We normalize after parse.
+        kind: z.string(),
+        source_refs: z.record(z.string(), z.unknown()).nullish(),
+        hard_date: z.string().nullish(),
+        script: z.string().nullish(),
+        post_title: z.string().nullish(),
+        description: z.string().nullish(),
+        hashtags: z.array(z.string()).nullish(),
+        cta: z.string().nullish(),
+        visual_notes: z.string().nullish(),
+        optimal_post_window: z.string().nullish(),
+        suggested_duration: z.string().nullish(),
+        thumbnail_concept: z.string().nullish(),
+        engagement_hook: z.string().nullish(),
+        trending_sound: z.string().nullish(),
+        saturation_warning: z.string().nullish(),
+      })
+      .passthrough()
+      .nullish(),
+  })
+  .passthrough();
+
+const VALID_KINDS = new Set<GeneratedIdea["kind"]>([
+  "pattern",
+  "trend",
+  "rising",
+  "competitor",
+  "seasonal",
+]);
+
+function normalizeKind(raw: string): GeneratedIdea["kind"] {
+  const k = raw.toLowerCase().trim();
+  if (VALID_KINDS.has(k as GeneratedIdea["kind"]))
+    return k as GeneratedIdea["kind"];
+  // Common LLM variations → canonical.
+  if (k.startsWith("rising") || k.includes("velocity")) return "rising";
+  if (k.startsWith("trend")) return "trend";
+  if (k.startsWith("competitor") || k.startsWith("peer")) return "competitor";
+  if (k.startsWith("season") || k.startsWith("calendar")) return "seasonal";
+  return "pattern";
+}
 
 function buildPrompt(args: {
   rawIdea: string;
@@ -107,7 +145,13 @@ Return EXACTLY this JSON object and nothing else:
 
 If verdict is "add", the idea object must include EVERY field that the bulk video-ideas-agent produces: title, hook, format, rationale, kind, source_refs, script (shot-by-shot with SAY/ACTION/ON-SCREEN TEXT cues), post_title, description, hashtags (no leading #), cta, visual_notes, optimal_post_window, suggested_duration, thumbnail_concept, engagement_hook, trending_sound (or null). Match the creator's voice from their actual videos. Never invent stats or hashtags.
 
-Return ONLY the JSON. No preamble, no code fence.`;
+Return ONLY the JSON. No preamble, no code fence.
+
+The "kind" field must be one of: "pattern", "trend", "rising", "competitor", "seasonal". Do not invent adjacent labels like "rising_trend" or "competitor_format" — pick the closest one. If the spark fits a pattern the creator has already won with, that's "pattern".
+
+If you're going to set verdict="add", be CERTAIN every required idea field is present and well-formed. If you're not sure you can produce a full upload-ready idea (with shoot-by-shoot script, all five virality fields, etc.), prefer "needs_work" with a clear reframing reason — the user can iterate from there. Half-baked "add" objects waste the user's credits.
+
+Your VERY LAST output must be the JSON object. Nothing after it.`;
 }
 
 function parseEvaluation(text: string): EvaluationResult | null {
@@ -143,19 +187,43 @@ function parseEvaluation(text: string): EvaluationResult | null {
     }
   }
   for (const c of candidates) {
+    let json: unknown;
     try {
-      const parsed = EVALUATION_SCHEMA.safeParse(JSON.parse(c));
-      if (!parsed.success) continue;
+      json = JSON.parse(c);
+    } catch {
+      continue;
+    }
+    // First try the strict schema.
+    const strict = EVALUATION_SCHEMA.safeParse(json);
+    if (strict.success) {
+      const idea = strict.data.idea
+        ? {
+            ...strict.data.idea,
+            kind: normalizeKind(strict.data.idea.kind),
+          }
+        : undefined;
       return {
         ok: true,
-        verdict: parsed.data.verdict,
-        reasoning: parsed.data.reasoning,
-        idea: parsed.data.idea
-          ? (parsed.data.idea as GeneratedIdea)
-          : undefined,
+        verdict: strict.data.verdict,
+        reasoning: strict.data.reasoning,
+        idea: idea as GeneratedIdea | undefined,
       };
-    } catch {
-      // try next candidate
+    }
+    // Soft fallback: the model gave us a valid verdict + reasoning but
+    // bungled the idea sub-object (or some other passthrough field).
+    // Return the verdict so the user sees the explanation, drop the
+    // half-baked idea body.
+    const soft = EVALUATION_SOFT_SCHEMA.safeParse(json);
+    if (soft.success) {
+      return {
+        ok: true,
+        verdict: soft.data.verdict,
+        reasoning: soft.data.reasoning,
+        // Even for "add" verdicts we drop the idea here — the strict
+        // schema's failure means we don't trust the idea body enough
+        // to insert. The user gets the reasoning + can iterate.
+        idea: undefined,
+      };
     }
   }
   return null;
@@ -256,9 +324,14 @@ export async function runEvaluateIdea({
     });
     const parsed = parseEvaluation(result.text);
     if (!parsed) {
+      const preview = result.text.slice(0, 600).replace(/\s+/g, " ").trim();
+      console.error(
+        "[evaluate-idea-agent] could not parse evaluation. raw:",
+        preview,
+      );
       return {
         ok: false,
-        error: "Agent did not return a valid evaluation JSON.",
+        error: `Agent didn't return a valid evaluation. The model said: ${preview.slice(0, 240)}${preview.length > 240 ? "…" : ""}`,
         tokens: result.usage?.totalTokens ?? undefined,
       };
     }
