@@ -30,7 +30,7 @@ import {
 // create + list — it identifies which connected account the ideas
 // belong to.
 
-const KIND = z.enum(["pattern", "trend", "competitor", "seasonal"]);
+const KIND = z.enum(["pattern", "trend", "rising", "competitor", "seasonal"]);
 const STATUS = z.enum(["pending", "scheduled", "done", "dismissed"]);
 
 function normalizeHashtags(tags: string[] | null | undefined): string[] {
@@ -134,6 +134,7 @@ export function buildVideoIdeasTools(
         thumbnail_concept: z.string().nullish(),
         engagement_hook: z.string().nullish(),
         trending_sound: z.string().nullish(),
+        saturation_warning: z.string().nullish(),
       }),
       execute: async (args) => {
         const { data: integ } = await supabase
@@ -177,6 +178,7 @@ export function buildVideoIdeasTools(
             thumbnail_concept: args.thumbnail_concept ?? null,
             engagement_hook: args.engagement_hook ?? null,
             trending_sound: args.trending_sound ?? null,
+            saturation_warning: args.saturation_warning ?? null,
           })
           .select("id")
           .single();

@@ -45,7 +45,7 @@ const EVALUATION_SCHEMA = z.object({
       hook: z.string().nullish(),
       format: z.string().nullish(),
       rationale: z.string().nullish(),
-      kind: z.enum(["pattern", "trend", "competitor", "seasonal"]),
+      kind: z.enum(["pattern", "trend", "rising", "competitor", "seasonal"]),
       source_refs: z.record(z.string(), z.unknown()).nullish(),
       hard_date: z.string().nullish(),
       script: z.string().nullish(),
@@ -59,6 +59,7 @@ const EVALUATION_SCHEMA = z.object({
       thumbnail_concept: z.string().nullish(),
       engagement_hook: z.string().nullish(),
       trending_sound: z.string().nullish(),
+      saturation_warning: z.string().nullish(),
     })
     .nullish(),
 });
@@ -87,13 +88,15 @@ User's raw idea spark:
 Required procedure:
 1. tiktok_top_my_videos (top_n 10, from_history 100) — what hits for this creator.
 2. tiktok_list_my_videos (max_count 20) — current voice.
-3. ${args.hasApify ? "tiktok_search_hashtag on the creator's primary niche hashtag (limit 10) to see what's working in the space right now." : "(Apify not configured — judge from the creator's own data only.)"}
+3. ${args.hasApify ? `tiktok_search_hashtag on the creator's primary niche hashtag (limit 20) to see what's working in the space right now.
+   • Velocity check: group results by week using create_time. If the past 3-7 days' top videos have notably higher engagement than the prior week, the format/topic is RISING — consider labeling kind="rising" with a velocity_note in source_refs.
+   • Saturation check: if 15+ recent videos in the niche use the same format as the spark with below-niche-median engagement, the topic is saturated — note this and either reframe (needs_work) or pass.` : "(Apify not configured — judge from the creator's own data only; you cannot label something 'rising' without velocity evidence.)"}
 4. Compare the spark against what works for this creator's audience. Be SPECIFIC about why it does or doesn't fit.
 
 Verdict rules:
 - "add" → it clearly fits the creator's winning pattern, you have a concrete plan, and you're confident it would perform on par with or above their median. Fully flesh out the idea (every upload-ready field, every virality field).
 - "needs_work" → the spark has potential but needs reframing to fit. Provide a SPECIFIC reframing in reasoning, and partially fill the idea (title + format + rationale + a couple of fields). Skip script/full content — the user should iterate before you commit to those.
-- "pass" → it's off-niche or contradicts what works for this creator. State the specific reason ("your top 10 are all comparison hooks; solo performance of an obscure piece would underperform your median by 40-60% based on the post-mortems above"). Do NOT include the idea object in the response.
+- "pass" → it's off-niche, contradicts what works for this creator, OR the format is saturated with poor returns. State the specific reason ("your top 10 are all comparison hooks; solo performance of an obscure piece would underperform your median by 40-60%" or "#fingerstyle currently has 30+ posts in this exact format with engagement dropping ~40% vs niche median"). Do NOT include the idea object in the response.
 
 Return EXACTLY this JSON object and nothing else:
 {
@@ -319,6 +322,7 @@ export async function persistEvaluatedIdea(
       thumbnail_concept: idea.thumbnail_concept ?? null,
       engagement_hook: idea.engagement_hook ?? null,
       trending_sound: idea.trending_sound ?? null,
+      saturation_warning: idea.saturation_warning ?? null,
     })
     .select("id")
     .single();

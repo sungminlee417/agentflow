@@ -34,8 +34,9 @@ export type VideoIdeaRow = {
   hook: string | null;
   format: string | null;
   rationale: string | null;
-  kind: "pattern" | "trend" | "competitor" | "seasonal";
+  kind: "pattern" | "trend" | "rising" | "competitor" | "seasonal";
   source_refs: Record<string, unknown> | null;
+  saturation_warning: string | null;
   expires_at: string;
   status: "pending" | "scheduled" | "done" | "dismissed";
   priority: number;
@@ -97,6 +98,7 @@ type KindFilter = "all" | VideoIdeaRow["kind"];
 const KIND_LABELS: Record<VideoIdeaRow["kind"], string> = {
   pattern: "Pattern",
   trend: "Trend",
+  rising: "↗ Rising",
   competitor: "Competitor",
   seasonal: "Seasonal",
 };
@@ -105,6 +107,11 @@ const KIND_COLORS: Record<VideoIdeaRow["kind"], string> = {
   pattern:
     "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
   trend: "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300",
+  // Rising gets a brighter, more saturated treatment so it actively
+  // catches the eye in a list — these have the shortest TTL and are
+  // the user's "act fast" candidates.
+  rising:
+    "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-950/50 dark:text-fuchsia-200 ring-1 ring-fuchsia-300/60 dark:ring-fuchsia-800/60",
   competitor:
     "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300",
   seasonal:
@@ -323,6 +330,7 @@ export function VideoIdeasList({
     const c: Record<string, number> = {
       all: 0,
       pattern: 0,
+      rising: 0,
       trend: 0,
       competitor: 0,
       seasonal: 0,
@@ -826,7 +834,7 @@ export function VideoIdeasList({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {(["all", "pattern", "trend", "competitor", "seasonal"] as KindFilter[]).map(
+        {(["all", "pattern", "rising", "trend", "competitor", "seasonal"] as KindFilter[]).map(
           (k) => {
             const active = filter === k;
             const label = k === "all" ? "All" : KIND_LABELS[k];
@@ -1401,6 +1409,15 @@ function IdeaCardBody({
         <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
           {i.rationale}
         </p>
+      )}
+      {i.saturation_warning && (
+        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          <span aria-hidden="true">⚠</span>
+          <span>
+            <span className="font-medium">Saturated · </span>
+            {i.saturation_warning}
+          </span>
+        </div>
       )}
       <SourceRefs refs={i.source_refs} />
       <ViralityStrip i={i} />

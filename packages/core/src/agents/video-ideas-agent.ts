@@ -16,7 +16,12 @@ import { buildToolsForIntegrations, loadIntegration } from "../tools";
 // gather evidence, then returns a JSON array of ideas. The caller
 // (refresh API) decides expires_at per kind and inserts to DB.
 
-export type VideoIdeaKind = "pattern" | "trend" | "competitor" | "seasonal";
+export type VideoIdeaKind =
+  | "pattern"
+  | "trend"
+  | "rising"
+  | "competitor"
+  | "seasonal";
 
 export type GeneratedIdea = {
   title: string;
@@ -27,6 +32,9 @@ export type GeneratedIdea = {
   source_refs?: Record<string, unknown>;
   /** Only meaningful for seasonal — a hard date the idea should ship by. */
   hard_date?: string;
+  /** Free-text warning when the format/topic shows saturation signals.
+   *  Surfaces on the card so the user understands the recommended twist. */
+  saturation_warning?: string;
   // Upload-ready content:
   /** Full beat-by-beat script ready to record. */
   script?: string;
@@ -66,9 +74,10 @@ const IDEA_SCHEMA = z.object({
   hook: z.string().nullish(),
   format: z.string().nullish(),
   rationale: z.string().nullish(),
-  kind: z.enum(["pattern", "trend", "competitor", "seasonal"]),
+  kind: z.enum(["pattern", "trend", "rising", "competitor", "seasonal"]),
   source_refs: z.record(z.string(), z.unknown()).nullish(),
   hard_date: z.string().nullish(),
+  saturation_warning: z.string().nullish(),
   script: z.string().nullish(),
   post_title: z.string().nullish(),
   description: z.string().nullish(),
@@ -168,15 +177,20 @@ Required procedure:
 4. Extract the creator's most-used hashtags from the top performers.
 4b. TIMING SIGNAL: from the top 10 performers' create_time values, note the day-of-week + hour patterns (convert from unix seconds to UTC, then state the assumption that the creator's audience is roughly in their own timezone). This becomes the basis for each idea's optimal_post_window.
 4c. AUDIO/SOUND: scan the top performers for music_meta or recurring audio. If the creator has a winning sound pattern (original audio vs trending), capture it.
-${hasApify ? `5. For each of the top 2-3 hashtags, tiktok_search_hashtag (limit 15). From the results: (a) note what's trending right now, (b) collect 3-5 distinct authors (NOT the user) who consistently post in this niche — these are auto-discovered competitors.
+${hasApify ? `5. For each of the top 2-3 hashtags, tiktok_search_hashtag (limit 25). From the results:
+   (a) Note what's trending right now (high recent engagement)
+   (b) **Velocity check** — group videos by week using create_time. If the past 3-7 days' top performers have notably HIGHER engagement (likes/views) than the prior 7-14 days, that hashtag/topic is ACCELERATING. Call this out — it's the seed for rising-kind ideas.
+   (c) **Saturation check** — if a hashtag has 15+ recent videos with engagement clearly BELOW the niche median (e.g. half), it's oversaturated. Don't recommend pattern ideas in that exact format without a strong twist — flag it in saturation_warning.
+   (d) Collect 3-5 distinct authors (NOT the user) who consistently post in this niche — these are auto-discovered competitors.
 6. For 1-2 of those competitor handles, tiktok_get_profile (videos_limit 10) to surface songs/formats they covered well that the user hasn't.
-7. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.` : `5. Skip Apify-backed competitor + trend discovery (not configured). Lean harder on pattern + seasonal kinds.
+7. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.` : `5. Skip Apify-backed competitor + trend + rising discovery (not configured). Lean harder on pattern + seasonal kinds.
 6. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.`}
 
 Now produce exactly ${count} ideas, balanced across these kinds based on what's available:
 - "pattern": extrapolated from the user's own winning format. Suggest a specific NEW song / topic / target they haven't covered that fits the pattern.
 - ${hasApify ? `"competitor": cite the competitor handle in source_refs ({competitor_handle: "...", competitor_video_url: "..."}). The idea must be something they nailed that the user hasn't.` : `"competitor": skip — no competitor data available without Apify.`}
-- ${hasApify ? `"trend": cite the hashtag and/or trending sound in source_refs. Trends die fast — only include if you have direct evidence from tool calls.` : `"trend": skip — no trend data available without Apify.`}
+- ${hasApify ? `"trend": cite the hashtag and/or trending sound in source_refs. The trend is CURRENTLY visible in the niche — already in motion but not yet saturated.` : `"trend": skip — no trend data available without Apify.`}
+- ${hasApify ? `"rising": engagement velocity is ACCELERATING in the last 3-7 days but the trend hasn't peaked. Cite specific evidence in source_refs ({hashtag: "...", velocity_note: "engagement up ~Nx vs prior week", sample_url: "..."}) — never label something "rising" without that velocity comparison from your tool data. These are the "be early to the curve" plays. Keep these to 1-2 per refresh max.` : `"rising": skip — no velocity data available without Apify.`}
 - "seasonal": calendar-anchored — a holiday, anniversary of a famous piece, a known meme day. Include hard_date (ISO 8601) for when the idea should ship by. Today is ${today}; only suggest hard_dates in the next 60 days.
 
 Critical:
@@ -184,7 +198,8 @@ Critical:
 - Each title must be specific and recordable — "Cover Hotel California — acoustic vs classical" not "do another comparison video".
 - hook must be the actual first spoken/shown line.
 - format should be short ("acoustic vs classical comparison", "solo performance with text overlay").
-- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").${hasReviews ? `
+- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").
+- saturation_warning (NULL or short string): only set this when you saw the SPECIFIC format or topic showing saturation signals (lots of similar recent videos with below-niche-median engagement). Be specific — e.g. "Acoustic-vs-classical comparisons of Bach pieces have 30+ posts in #fingerstyle this month with median engagement dropping ~40% — twist needed to stand out (suggested in the script)." Leave null when there's no saturation concern.${hasReviews ? `
 - The post-mortems above are GROUND TRUTH from videos this creator already shipped. Steer toward formats/hooks that hit; steer away from ones that underperformed. When you reuse a winning pattern, say so in the rationale.` : ""}
 
 Upload-ready content for EVERY idea — the creator should be able to record + post directly from the card without writing anything new:
@@ -244,9 +259,10 @@ JSON schema for the final response:
       "hook": string,
       "format": string,
       "rationale": string,
-      "kind": "pattern" | "trend" | "competitor" | "seasonal",
-      "source_refs": { ... },        // free-form object, e.g. { "competitor_handle": "@x", "hashtag": "#y", "url": "https://..." }
+      "kind": "pattern" | "trend" | "rising" | "competitor" | "seasonal",
+      "source_refs": { ... },        // free-form object, e.g. { "competitor_handle": "@x", "hashtag": "#y", "velocity_note": "...", "url": "https://..." }
       "hard_date": string,           // only for seasonal, ISO 8601 date
+      "saturation_warning": string | null,  // null when no signal of saturation
       "script": string,              // beat-by-beat, with timestamps
       "post_title": string,
       "description": string,
@@ -541,6 +557,7 @@ export const KIND_TTL_DAYS: Record<VideoIdeaKind, number> = {
   pattern: 30,
   competitor: 14,
   trend: 7,
+  rising: 5, // shorter than trend — rising signal degrades fast
   seasonal: 60, // fallback if hard_date is missing
 };
 

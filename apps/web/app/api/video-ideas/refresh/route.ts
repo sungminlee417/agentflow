@@ -255,6 +255,7 @@ export async function POST(request: NextRequest) {
           thumbnail_concept: idea.thumbnail_concept ?? null,
           engagement_hook: idea.engagement_hook ?? null,
           trending_sound: idea.trending_sound ?? null,
+          saturation_warning: idea.saturation_warning ?? null,
         }));
 
         if (rows.length > 0) {
