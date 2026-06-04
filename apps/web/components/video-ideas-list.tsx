@@ -4,6 +4,16 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+  AlertTriangle,
+  Clock,
+  GripVertical,
+  Image as ImageIcon,
+  MessageCircle,
+  Music,
+  Timer,
+  type LucideIcon,
+} from "lucide-react";
+import {
   DndContext,
   closestCenter,
   PointerSensor,
@@ -1141,35 +1151,35 @@ function IdeaDetailModal({
             <div className="space-y-2 rounded-md bg-neutral-50 px-3 py-3 text-xs dark:bg-neutral-900">
               {idea.optimal_post_window && (
                 <ViralityRow
-                  icon="🕒"
+                  Icon={Clock}
                   label="When to post"
                   value={idea.optimal_post_window}
                 />
               )}
               {idea.suggested_duration && (
                 <ViralityRow
-                  icon="⏱"
+                  Icon={Timer}
                   label="Target length"
                   value={idea.suggested_duration}
                 />
               )}
               {idea.thumbnail_concept && (
                 <ViralityRow
-                  icon="🖼"
+                  Icon={ImageIcon}
                   label="Cover / first frame"
                   value={idea.thumbnail_concept}
                 />
               )}
               {idea.engagement_hook && (
                 <ViralityRow
-                  icon="💬"
+                  Icon={MessageCircle}
                   label="Comment-driver"
                   value={idea.engagement_hook}
                 />
               )}
               {idea.trending_sound && (
                 <ViralityRow
-                  icon="🎵"
+                  Icon={Music}
                   label="Sound"
                   value={idea.trending_sound}
                 />
@@ -1474,7 +1484,10 @@ function IdeaCardBody({
       )}
       {i.saturation_warning && (
         <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-          <span aria-hidden="true">⚠</span>
+          <AlertTriangle
+            className="mt-0.5 h-3 w-3 shrink-0"
+            aria-hidden="true"
+          />
           <span>
             <span className="font-medium">Saturated · </span>
             {i.saturation_warning}
@@ -1591,21 +1604,7 @@ function SortableIdeaCard({
           {...listeners}
           className="cursor-grab touch-none rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 active:cursor-grabbing dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
         >
-          {/* Grid-of-dots glyph — visually unambiguous as a drag affordance */}
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <circle cx="4" cy="3" r="1.2" />
-            <circle cx="10" cy="3" r="1.2" />
-            <circle cx="4" cy="7" r="1.2" />
-            <circle cx="10" cy="7" r="1.2" />
-            <circle cx="4" cy="11" r="1.2" />
-            <circle cx="10" cy="11" r="1.2" />
-          </svg>
+          <GripVertical className="h-4 w-4" aria-hidden="true" />
         </button>
         <span className="font-mono text-[11px] font-medium text-neutral-500">
           {position}
@@ -1617,17 +1616,20 @@ function SortableIdeaCard({
 }
 
 function ViralityRow({
-  icon,
+  Icon,
   label,
   value,
 }: {
-  icon: string;
+  Icon: LucideIcon;
   label: string;
   value: string;
 }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="mt-0.5 shrink-0 text-sm leading-none">{icon}</span>
+      <Icon
+        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neutral-500"
+        aria-hidden="true"
+      />
       <div className="min-w-0 flex-1">
         <div className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">
           {label}
@@ -1641,16 +1643,16 @@ function ViralityRow({
 }
 
 function ViralityStrip({ i }: { i: VideoIdeaRow }) {
-  const chips: { icon: string; label: string }[] = [];
+  const chips: { Icon: LucideIcon; label: string }[] = [];
   if (i.optimal_post_window) {
-    chips.push({ icon: "🕒", label: i.optimal_post_window });
+    chips.push({ Icon: Clock, label: i.optimal_post_window });
   }
   if (i.suggested_duration) {
-    chips.push({ icon: "⏱", label: i.suggested_duration });
+    chips.push({ Icon: Timer, label: i.suggested_duration });
   }
   if (i.trending_sound) {
     chips.push({
-      icon: "🎵",
+      Icon: Music,
       label:
         i.trending_sound.length > 50
           ? i.trending_sound.slice(0, 50) + "…"
@@ -1665,7 +1667,7 @@ function ViralityStrip({ i }: { i: VideoIdeaRow }) {
           key={idx}
           className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
         >
-          <span>{c.icon}</span>
+          <c.Icon className="h-3 w-3" aria-hidden="true" />
           <span>{c.label}</span>
         </span>
       ))}

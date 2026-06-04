@@ -3,6 +3,17 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  Code2,
+  Cog,
+  LogOut,
+  MessageSquare,
+  Plug,
+  Plus,
+  Video,
+} from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { MANAGERS } from "@agentflow/core";
 
@@ -14,6 +25,8 @@ type ConversationSummary = {
 
 const FOCUS_RING =
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500";
+
+const ICON_CLS = "h-4 w-4 shrink-0";
 
 const MAX_VISIBLE_CONVOS = 6;
 
@@ -77,7 +90,7 @@ export function Sidebar({
             className={navLinkClass(isActive("/video-ideas", false))}
           >
             <span className="flex items-center gap-2">
-              <span aria-hidden="true">📹</span>
+              <Video className={ICON_CLS} aria-hidden="true" />
               <span>Video ideas</span>
             </span>
           </Link>
@@ -90,7 +103,7 @@ export function Sidebar({
               )}
             >
               <span className="flex items-center gap-2">
-                <span aria-hidden="true">⚡</span>
+                <Code2 className={ICON_CLS} aria-hidden="true" />
                 <span>{codeManager.label}</span>
               </span>
             </Link>
@@ -101,7 +114,7 @@ export function Sidebar({
             className={navLinkClass(isActive("/activity"))}
           >
             <span className="flex items-center gap-2">
-              <span aria-hidden="true">📈</span>
+              <Activity className={ICON_CLS} aria-hidden="true" />
               <span>Activity</span>
             </span>
           </Link>
@@ -110,23 +123,29 @@ export function Sidebar({
         {/* Chat section */}
         <div className="border-t border-neutral-200 px-2 pt-3 dark:border-neutral-800">
           <div className="flex items-center justify-between gap-2 px-2.5 pb-1.5">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+            <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+              <MessageSquare className="h-3 w-3" aria-hidden="true" />
               Chat
             </span>
             <Link
               href="/chat"
               onClick={onClose}
-              className={`flex h-5 w-5 items-center justify-center rounded text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-900 ${FOCUS_RING} dark:hover:bg-neutral-800 dark:hover:text-neutral-100`}
+              className={`flex h-6 w-6 items-center justify-center rounded text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-900 ${FOCUS_RING} dark:hover:bg-neutral-800 dark:hover:text-neutral-100`}
               title="New chat"
               aria-label="New chat"
             >
-              +
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
             </Link>
           </div>
           {conversations.length === 0 ? (
-            <p className="px-2.5 py-1.5 text-xs text-neutral-500">
-              No conversations yet.
-            </p>
+            <Link
+              href="/chat"
+              onClick={onClose}
+              className={`mx-1 mb-3 flex items-center justify-between rounded-md border border-dashed border-neutral-300 px-2.5 py-2 text-[11px] text-neutral-500 transition hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 ${FOCUS_RING} dark:border-neutral-700 dark:hover:border-neutral-600 dark:hover:bg-neutral-900 dark:hover:text-neutral-300`}
+            >
+              <span>No conversations yet.</span>
+              <span className="font-medium">Start one →</span>
+            </Link>
           ) : (
             <ul className="space-y-0.5 pb-3">
               {visibleConvos.map((c) => {
@@ -172,9 +191,13 @@ export function Sidebar({
           <Link
             href="/settings"
             onClick={onClose}
-            className="mx-2 mb-2 block rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800 transition hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300 dark:hover:bg-amber-950/50"
+            className={`mx-2 mb-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800 transition hover:bg-amber-100 ${FOCUS_RING} dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300 dark:hover:bg-amber-950/50`}
           >
-            ⚠ Add an AI key in Settings to start chatting
+            <AlertTriangle
+              className="mt-0.5 h-3 w-3 shrink-0"
+              aria-hidden="true"
+            />
+            <span>Add an AI key in Settings to start chatting</span>
           </Link>
         )}
         <nav className="space-y-0.5">
@@ -184,7 +207,7 @@ export function Sidebar({
             className={navLinkClass(isActive("/integrations"))}
           >
             <span className="flex items-center gap-2">
-              <span aria-hidden="true">🔌</span>
+              <Plug className={ICON_CLS} aria-hidden="true" />
               <span>Integrations</span>
             </span>
           </Link>
@@ -194,16 +217,17 @@ export function Sidebar({
             className={navLinkClass(isActive("/settings"))}
           >
             <span className="flex items-center gap-2">
-              <span aria-hidden="true">⚙</span>
+              <Cog className={ICON_CLS} aria-hidden="true" />
               <span>Settings</span>
             </span>
           </Link>
           <button
             type="button"
             onClick={signOut}
-            className={`w-full rounded-md px-2.5 py-1.5 text-left text-sm text-neutral-500 transition hover:bg-neutral-100 ${FOCUS_RING} dark:text-neutral-400 dark:hover:bg-neutral-900`}
+            className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm text-neutral-500 transition hover:bg-neutral-100 ${FOCUS_RING} dark:text-neutral-400 dark:hover:bg-neutral-900`}
           >
-            Sign out
+            <LogOut className={ICON_CLS} aria-hidden="true" />
+            <span>Sign out</span>
           </button>
         </nav>
       </div>

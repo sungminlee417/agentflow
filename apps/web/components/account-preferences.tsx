@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronDown, ChevronUp, SlidersHorizontal } from "lucide-react";
 
 // Per-account constraints/preferences the agent must respect when
 // generating + evaluating ideas. Free-form text, e.g.:
@@ -80,7 +81,10 @@ export function AccountPreferences({
         className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs transition hover:bg-neutral-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 dark:hover:bg-neutral-900"
       >
         <span className="flex items-center gap-2">
-          <span aria-hidden="true">🎚</span>
+          <SlidersHorizontal
+            className="h-3.5 w-3.5 text-neutral-500"
+            aria-hidden="true"
+          />
           <span className="font-medium text-neutral-700 dark:text-neutral-300">
             Preferences for this account
           </span>
@@ -91,7 +95,11 @@ export function AccountPreferences({
             </span>
           )}
         </span>
-        <span className="text-neutral-500">{open ? "▲" : "▼"}</span>
+        {open ? (
+          <ChevronUp className="h-3.5 w-3.5 text-neutral-500" aria-hidden="true" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 text-neutral-500" aria-hidden="true" />
+        )}
       </button>
 
       {open && (

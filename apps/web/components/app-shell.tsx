@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Menu, X } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 
 type ConversationSummary = {
@@ -55,14 +56,20 @@ export function AppShell({
 
       {/* ── Main content area ───────────────────────────────────────── */}
       <main className="h-screen flex-1 overflow-y-auto">
-        {/* Hamburger / close button – only visible on mobile */}
+        {/* Hamburger / close button – only visible on mobile. 44×44 tap
+            target meets the iOS HIG / WCAG minimum. */}
         <button
           type="button"
           aria-label={sidebarOpen ? "Close menu" : "Open menu"}
+          aria-expanded={sidebarOpen}
           onClick={() => setSidebarOpen((o) => !o)}
-          className="fixed left-3 top-3 z-40 flex h-8 w-8 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-700 shadow-sm transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800 md:hidden"
+          className="fixed left-2.5 top-2.5 z-40 flex h-11 w-11 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-700 shadow-sm transition hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 active:bg-neutral-200 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:active:bg-neutral-700 md:hidden"
         >
-          {sidebarOpen ? "✕" : "☰"}
+          {sidebarOpen ? (
+            <X className="h-5 w-5" aria-hidden="true" />
+          ) : (
+            <Menu className="h-5 w-5" aria-hidden="true" />
+          )}
         </button>
 
         {children}

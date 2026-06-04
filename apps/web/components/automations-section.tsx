@@ -10,6 +10,7 @@ import {
   type AutomationSchedule,
   type AutomationTypeMeta,
 } from "@agentflow/core";
+import { Check } from "lucide-react";
 import { useConfirm } from "@/components/confirm-dialog";
 
 export type AutomationRow = {
@@ -235,14 +236,17 @@ export function AutomationsSection({
             {selectedMeta.requires.map((r) => (
               <span
                 key={r}
-                className={
+                className={`inline-flex items-center gap-1 ${
                   connectedProviders.includes(r)
                     ? "text-emerald-600 dark:text-emerald-400"
                     : "text-amber-600 dark:text-amber-400"
-                }
+                }`}
               >
+                {connectedProviders.includes(r) ? (
+                  <Check className="h-3 w-3" aria-hidden="true" />
+                ) : null}
                 {r}
-                {connectedProviders.includes(r) ? "✓" : " (not connected)"}{" "}
+                {connectedProviders.includes(r) ? "" : " (not connected)"}{" "}
               </span>
             ))}
           </p>
