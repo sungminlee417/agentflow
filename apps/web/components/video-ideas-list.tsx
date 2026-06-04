@@ -673,6 +673,8 @@ export function VideoIdeasList({
 
   async function setStatus(id: string, status: VideoIdeaRow["status"]) {
     const prev = ideas;
+    const title = prev.find((r) => r.id === id)?.title ?? "Idea";
+    const wasOnIdeas = view === "pending";
     setIdeas((rows) =>
       rows.map((r) => (r.id === id ? { ...r, status } : r)),
     );
@@ -683,7 +685,20 @@ export function VideoIdeasList({
     });
     if (!res.ok) {
       setIdeas(prev);
-      setError(`Update failed (${res.status}).`);
+      toast.error(`Update failed (${res.status}).`);
+      return;
+    }
+    // Confirm the action when it would change tabs — the user might
+    // miss the silent disappearance. Offer a jump-to action.
+    if (status === "scheduled" && wasOnIdeas) {
+      toast.success(`Added to plan — ${title.slice(0, 60)}`, {
+        action: {
+          label: "View Working on",
+          onClick: () => setView("scheduled"),
+        },
+      });
+    } else if (status === "pending" && view === "scheduled") {
+      toast.success("Moved back to Ideas.");
     }
   }
 
@@ -693,7 +708,7 @@ export function VideoIdeasList({
     const res = await fetch(`/api/video-ideas/${id}`, { method: "DELETE" });
     if (!res.ok) {
       setIdeas(prev);
-      setError(`Delete failed (${res.status}).`);
+      toast.error(`Delete failed (${res.status}).`);
     }
   }
 
