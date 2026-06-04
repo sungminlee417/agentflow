@@ -389,7 +389,15 @@ export function ChatView({
                   )
                   .map((p) => p.text)
                   .join(""),
-        }));
+        }))
+        // Drop messages whose collapsed text is empty. Assistant turns
+        // that contained ONLY tool calls (and produced no spoken text)
+        // would otherwise get sent as { content: "" } and Anthropic
+        // rejects empty text content blocks. The model loses its
+        // internal tool-call reasoning trace for those turns, but the
+        // conversation flow stays coherent because the assistant's
+        // subsequent text turn already incorporated the tool results.
+        .filter((m) => m.content.trim().length > 0);
 
       const res = await fetch("/api/chat", {
         method: "POST",
