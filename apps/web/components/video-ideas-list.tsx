@@ -1,8 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  KeyboardSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Modal } from "@/components/modal";
 import { MarkDoneModal } from "@/components/mark-done-modal";
 import { QuickAddIdea } from "@/components/quick-add-idea";
@@ -20,6 +38,7 @@ export type VideoIdeaRow = {
   source_refs: Record<string, unknown> | null;
   expires_at: string;
   status: "pending" | "scheduled" | "done" | "dismissed";
+  priority: number;
   created_at: string;
   script: string | null;
   post_title: string | null;
@@ -249,13 +268,27 @@ export function VideoIdeasList({
     [ideas, detailIdeaId],
   );
 
-  const [view, setView] = useState<"pending" | "posted">("pending");
+  const [view, setView] = useState<"pending" | "scheduled" | "posted">(
+    "pending",
+  );
 
   const pendingIdeas = useMemo(
+    () => ideas.filter((i) => i.status === "pending"),
+    [ideas],
+  );
+  const scheduledIdeas = useMemo(
     () =>
-      ideas.filter(
-        (i) => i.status === "pending" || i.status === "scheduled",
-      ),
+      ideas
+        .filter((i) => i.status === "scheduled")
+        // Ascending priority = top of queue (= #1 user's working on
+        // first). Ties broken by created_at so newly-promoted items
+        // land predictably.
+        .sort((a, b) => {
+          if (a.priority !== b.priority) return a.priority - b.priority;
+          return (
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+        }),
     [ideas],
   );
   const postedIdeas = useMemo(
@@ -270,11 +303,21 @@ export function VideoIdeasList({
     [ideas],
   );
 
+  const baseForView = useCallback(
+    (v: "pending" | "scheduled" | "posted") =>
+      v === "pending"
+        ? pendingIdeas
+        : v === "scheduled"
+          ? scheduledIdeas
+          : postedIdeas,
+    [pendingIdeas, scheduledIdeas, postedIdeas],
+  );
+
   const filtered = useMemo(() => {
-    const base = view === "pending" ? pendingIdeas : postedIdeas;
+    const base = baseForView(view);
     if (filter === "all") return base;
     return base.filter((i) => i.kind === filter);
-  }, [view, pendingIdeas, postedIdeas, filter]);
+  }, [view, baseForView, filter]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {
@@ -284,13 +327,13 @@ export function VideoIdeasList({
       competitor: 0,
       seasonal: 0,
     };
-    const base = view === "pending" ? pendingIdeas : postedIdeas;
+    const base = baseForView(view);
     for (const i of base) {
       c["all"] = (c["all"] ?? 0) + 1;
       c[i.kind] = (c[i.kind] ?? 0) + 1;
     }
     return c;
-  }, [view, pendingIdeas, postedIdeas]);
+  }, [view, baseForView]);
 
   const [markDoneIdeaId, setMarkDoneIdeaId] = useState<string | null>(null);
   const markDoneIdea = useMemo(
@@ -298,6 +341,70 @@ export function VideoIdeasList({
     [ideas, markDoneIdeaId],
   );
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+
+  // dnd-kit sensors. Pointer = mouse, Touch = mobile, Keyboard = a11y.
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 150, tolerance: 8 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  async function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const fromIdx = scheduledIdeas.findIndex((i) => i.id === active.id);
+    const toIdx = scheduledIdeas.findIndex((i) => i.id === over.id);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    // Optimistic reorder of the local state.
+    const reordered = arrayMove(scheduledIdeas, fromIdx, toIdx);
+
+    // Compute the new priority by averaging the neighbours at the
+    // drop position. Large default gap (10000) leaves room for ~14
+    // halving inserts before we'd ever need to rebalance.
+    const moved = reordered[toIdx]!;
+    const prevPriority = toIdx > 0 ? reordered[toIdx - 1]!.priority : null;
+    const nextPriority =
+      toIdx < reordered.length - 1 ? reordered[toIdx + 1]!.priority : null;
+    let newPriority: number;
+    if (prevPriority === null && nextPriority === null) {
+      newPriority = 10000;
+    } else if (prevPriority === null) {
+      newPriority = (nextPriority as number) - 10000;
+    } else if (nextPriority === null) {
+      newPriority = prevPriority + 10000;
+    } else {
+      newPriority = Math.floor((prevPriority + nextPriority) / 2);
+      // If neighbours are adjacent integers (no room), nudge — the
+      // server will eventually rebalance if this becomes common.
+      if (newPriority === prevPriority) newPriority = prevPriority + 1;
+    }
+
+    setIdeas((rows) =>
+      rows.map((r) => (r.id === moved.id ? { ...r, priority: newPriority } : r)),
+    );
+
+    const res = await fetch(`/api/video-ideas/${moved.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priority: newPriority }),
+    });
+    if (!res.ok) {
+      // Revert on failure.
+      setIdeas((rows) =>
+        rows.map((r) =>
+          r.id === moved.id ? { ...r, priority: moved.priority } : r,
+        ),
+      );
+      setError("Couldn't save the new order. Try again.");
+    }
+  }
 
   async function runReviewNow(id: string) {
     setReviewingId(id);
@@ -687,9 +794,20 @@ export function VideoIdeasList({
       )}
 
       <div className="mt-6 flex items-center gap-1 rounded-md border border-neutral-200 bg-neutral-100/60 p-1 text-xs dark:border-neutral-800 dark:bg-neutral-900/60">
-        {(["pending", "posted"] as const).map((v) => {
+        {(["pending", "scheduled", "posted"] as const).map((v) => {
           const active = view === v;
-          const count = v === "pending" ? pendingIdeas.length : postedIdeas.length;
+          const count =
+            v === "pending"
+              ? pendingIdeas.length
+              : v === "scheduled"
+                ? scheduledIdeas.length
+                : postedIdeas.length;
+          const label =
+            v === "pending"
+              ? "Ideas"
+              : v === "scheduled"
+                ? "Working on"
+                : "Posted";
           return (
             <button
               key={v}
@@ -701,8 +819,7 @@ export function VideoIdeasList({
                   : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
               }`}
             >
-              {v === "pending" ? "Ideas" : "Posted"}{" "}
-              <span className="opacity-60">{count}</span>
+              {label} <span className="opacity-60">{count}</span>
             </button>
           );
         })}
@@ -745,118 +862,68 @@ export function VideoIdeasList({
       <section className="mt-6 space-y-3">
         {filtered.length === 0 && (
           <div className="rounded-lg border border-dashed border-neutral-300 px-4 py-10 text-center text-sm text-neutral-500 dark:border-neutral-700">
-            {view === "pending"
-              ? pendingIdeas.length === 0
+            {view === "pending" &&
+              (pendingIdeas.length === 0
                 ? "No ideas yet for this account. Hit Refresh to generate the first batch."
-                : "No ideas match this filter."
-              : postedIdeas.length === 0
-                ? "Nothing posted yet. Mark an idea as posted to see how it performs."
-                : "No posted videos match this filter."}
+                : "No ideas match this filter.")}
+            {view === "scheduled" &&
+              (scheduledIdeas.length === 0
+                ? "Nothing in your queue. Pick an idea from the Ideas tab and hit “Add to plan” to commit to it."
+                : "No queued ideas match this filter.")}
+            {view === "posted" &&
+              (postedIdeas.length === 0
+                ? "Nothing posted yet. From your queue, mark an idea as posted to see how it performs."
+                : "No posted videos match this filter.")}
           </div>
         )}
 
-        {filtered.map((i) => {
-          const hasFullContent =
-            !!i.script || !!i.description || (i.hashtags?.length ?? 0) > 0;
-          return (
+        {view === "scheduled" ? (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={filtered.map((i) => i.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {filtered.map((i, idx) => (
+                <SortableIdeaCard
+                  key={i.id}
+                  id={i.id}
+                  position={idx + 1}
+                >
+                  <IdeaCardBody
+                    i={i}
+                    reviewingId={reviewingId}
+                    runReviewNow={runReviewNow}
+                    setDetailIdeaId={setDetailIdeaId}
+                    setStatus={setStatus}
+                    setMarkDoneIdeaId={setMarkDoneIdeaId}
+                    remove={remove}
+                  />
+                </SortableIdeaCard>
+              ))}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          filtered.map((i) => (
             <article
               key={i.id}
               className="group rounded-lg border border-neutral-200 bg-white p-4 transition hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-950 dark:hover:border-neutral-700"
             >
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${KIND_COLORS[i.kind]}`}
-                >
-                  {KIND_LABELS[i.kind]}
-                </span>
-                {i.status !== "done" && (
-                  <span
-                    className={`text-xs ${
-                      isUrgent(i.expires_at)
-                        ? "text-rose-600 dark:text-rose-400"
-                        : "text-neutral-500"
-                    }`}
-                  >
-                    {expiresLabel(i.expires_at)}
-                  </span>
-                )}
-                {hasFullContent && (
-                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
-                    Upload-ready
-                  </span>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setDetailIdeaId(i.id)}
-                className="mt-2 text-left text-sm font-semibold text-neutral-900 hover:underline dark:text-neutral-100"
-              >
-                {i.title}
-              </button>
-              {i.hook && (
-                <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">
-                  <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
-                    Hook ·{" "}
-                  </span>
-                  {i.hook}
-                </p>
-              )}
-              {i.format && (
-                <p className="mt-1 text-xs text-neutral-500">
-                  Format: {i.format}
-                </p>
-              )}
-              {i.rationale && (
-                <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
-                  {i.rationale}
-                </p>
-              )}
-              <SourceRefs refs={i.source_refs} />
-              <ViralityStrip i={i} />
-              {i.status === "done" && (
-                <PerformanceBlock
-                  i={i}
-                  reviewing={reviewingId === i.id}
-                  onReview={() => runReviewNow(i.id)}
-                />
-              )}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDetailIdeaId(i.id)}
-                  className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-                >
-                  View details →
-                </button>
-                {i.status !== "done" && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setStatus(i.id, "scheduled")}
-                      className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                    >
-                      Mark scheduled
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setMarkDoneIdeaId(i.id)}
-                      className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                    >
-                      Mark posted…
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => remove(i.id)}
-                      className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
-                    >
-                      Dismiss
-                    </button>
-                  </>
-                )}
-              </div>
+              <IdeaCardBody
+                i={i}
+                reviewingId={reviewingId}
+                runReviewNow={runReviewNow}
+                setDetailIdeaId={setDetailIdeaId}
+                setStatus={setStatus}
+                setMarkDoneIdeaId={setMarkDoneIdeaId}
+                remove={remove}
+              />
             </article>
-          );
-        })}
+          ))
+        )}
       </section>
 
       <MarkDoneModal
@@ -1050,19 +1117,21 @@ function IdeaDetailModal({
         )}
 
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800">
-          <button
-            type="button"
-            onClick={onSchedule}
-            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-          >
-            Mark scheduled
-          </button>
+          {idea.status !== "scheduled" && (
+            <button
+              type="button"
+              onClick={onSchedule}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              + Add to plan
+            </button>
+          )}
           <button
             type="button"
             onClick={onDone}
             className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
           >
-            Mark done
+            Mark posted…
           </button>
         </div>
       </div>
@@ -1259,6 +1328,212 @@ function Stat({ label, value }: { label: string; value: string }) {
         {value}
       </div>
     </div>
+  );
+}
+
+// Card body rendered inside the article (sortable or static). Lives
+// here rather than inline in the map so both render paths stay in
+// sync. All the per-card actions and the performance + virality
+// blocks are part of this.
+function IdeaCardBody({
+  i,
+  reviewingId,
+  runReviewNow,
+  setDetailIdeaId,
+  setStatus,
+  setMarkDoneIdeaId,
+  remove,
+}: {
+  i: VideoIdeaRow;
+  reviewingId: string | null;
+  runReviewNow: (id: string) => void;
+  setDetailIdeaId: (id: string) => void;
+  setStatus: (id: string, status: VideoIdeaRow["status"]) => void;
+  setMarkDoneIdeaId: (id: string) => void;
+  remove: (id: string) => void;
+}) {
+  const hasFullContent =
+    !!i.script || !!i.description || (i.hashtags?.length ?? 0) > 0;
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${KIND_COLORS[i.kind]}`}
+        >
+          {KIND_LABELS[i.kind]}
+        </span>
+        {i.status !== "done" && i.status !== "scheduled" && (
+          <span
+            className={`text-xs ${
+              isUrgent(i.expires_at)
+                ? "text-rose-600 dark:text-rose-400"
+                : "text-neutral-500"
+            }`}
+          >
+            {expiresLabel(i.expires_at)}
+          </span>
+        )}
+        {hasFullContent && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+            Upload-ready
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => setDetailIdeaId(i.id)}
+        className="mt-2 text-left text-sm font-semibold text-neutral-900 hover:underline dark:text-neutral-100"
+      >
+        {i.title}
+      </button>
+      {i.hook && (
+        <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">
+          <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+            Hook ·{" "}
+          </span>
+          {i.hook}
+        </p>
+      )}
+      {i.format && (
+        <p className="mt-1 text-xs text-neutral-500">Format: {i.format}</p>
+      )}
+      {i.rationale && (
+        <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
+          {i.rationale}
+        </p>
+      )}
+      <SourceRefs refs={i.source_refs} />
+      <ViralityStrip i={i} />
+      {i.status === "done" && (
+        <PerformanceBlock
+          i={i}
+          reviewing={reviewingId === i.id}
+          onReview={() => runReviewNow(i.id)}
+        />
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setDetailIdeaId(i.id)}
+          className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+        >
+          View details →
+        </button>
+        {i.status === "pending" && (
+          <>
+            <button
+              type="button"
+              onClick={() => setStatus(i.id, "scheduled")}
+              className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              + Add to plan
+            </button>
+            <button
+              type="button"
+              onClick={() => setMarkDoneIdeaId(i.id)}
+              className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              Mark posted…
+            </button>
+            <button
+              type="button"
+              onClick={() => remove(i.id)}
+              className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
+            >
+              Dismiss
+            </button>
+          </>
+        )}
+        {i.status === "scheduled" && (
+          <>
+            <button
+              type="button"
+              onClick={() => setMarkDoneIdeaId(i.id)}
+              className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              Mark posted…
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatus(i.id, "pending")}
+              className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
+            >
+              Remove from plan
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+// Sortable wrapper for the Working tab. Provides the grip handle on
+// the left + position number + the dnd-kit transform/transition. The
+// card body is unchanged so behaviour stays consistent across tabs.
+function SortableIdeaCard({
+  id,
+  position,
+  children,
+}: {
+  id: string;
+  position: number;
+  children: React.ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+    zIndex: isDragging ? 10 : "auto",
+  };
+  return (
+    <article
+      ref={setNodeRef}
+      style={style}
+      className={`group flex items-stretch gap-2 rounded-lg border bg-white transition dark:bg-neutral-950 ${
+        isDragging
+          ? "border-neutral-900 shadow-lg dark:border-neutral-100"
+          : "border-neutral-200 hover:border-neutral-300 dark:border-neutral-800 dark:hover:border-neutral-700"
+      }`}
+    >
+      {/* Grip + position rail */}
+      <div className="flex w-9 shrink-0 flex-col items-center gap-1 border-r border-neutral-100 py-4 dark:border-neutral-800/60">
+        <button
+          type="button"
+          aria-label={`Drag to reorder (position ${position})`}
+          {...attributes}
+          {...listeners}
+          className="cursor-grab touch-none rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 active:cursor-grabbing dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+        >
+          {/* Grid-of-dots glyph — visually unambiguous as a drag affordance */}
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <circle cx="4" cy="3" r="1.2" />
+            <circle cx="10" cy="3" r="1.2" />
+            <circle cx="4" cy="7" r="1.2" />
+            <circle cx="10" cy="7" r="1.2" />
+            <circle cx="4" cy="11" r="1.2" />
+            <circle cx="10" cy="11" r="1.2" />
+          </svg>
+        </button>
+        <span className="font-mono text-[11px] font-medium text-neutral-500">
+          {position}
+        </span>
+      </div>
+      <div className="min-w-0 flex-1 p-4">{children}</div>
+    </article>
   );
 }
 
