@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronUp, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, SlidersHorizontal } from "lucide-react";
 
 // Per-account constraints/preferences the agent must respect when
 // generating + evaluating ideas. Free-form text, e.g.:
@@ -135,9 +135,12 @@ export function AccountPreferences({
               type="button"
               onClick={save}
               disabled={saving || !selectedAccountId}
-              className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+              className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
             >
-              {saving ? "Saving…" : "Save preferences"}
+              {saving && (
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              )}
+              {saving ? "Saving" : "Save preferences"}
             </button>
           </div>
         </div>

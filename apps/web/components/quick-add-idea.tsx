@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { CheckCircle2, Loader2, RotateCcw, X } from "lucide-react";
 
 // Quick-add idea inbox.
 //
@@ -21,19 +22,27 @@ type EvalResponse = {
   error?: string;
 };
 
-const VERDICT_COPY: Record<Verdict, { label: string; color: string }> = {
+import type { LucideIcon } from "lucide-react";
+
+const VERDICT_COPY: Record<
+  Verdict,
+  { label: string; Icon: LucideIcon; color: string }
+> = {
   add: {
-    label: "✓ Added to your ideas",
+    label: "Added to your ideas",
+    Icon: CheckCircle2,
     color:
       "bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-900 dark:text-emerald-200",
   },
   needs_work: {
-    label: "↻ Needs work",
+    label: "Needs work",
+    Icon: RotateCcw,
     color:
       "bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-200",
   },
   pass: {
-    label: "✗ Pass",
+    label: "Pass",
+    Icon: X,
     color:
       "bg-rose-50 border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-900 dark:text-rose-200",
   },
@@ -111,9 +120,12 @@ export function QuickAddIdea({
           type="button"
           onClick={evaluate}
           disabled={evaluating || !text.trim() || !selectedAccountId}
-          className="shrink-0 rounded-md bg-neutral-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
         >
-          {evaluating ? "Evaluating…" : "Evaluate"}
+          {evaluating && (
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+          )}
+          {evaluating ? "Evaluating" : "Evaluate"}
         </button>
       </div>
 
@@ -121,25 +133,30 @@ export function QuickAddIdea({
         <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>
       )}
 
-      {result?.verdict && (
-        <div
-          className={`mt-3 rounded-md border px-3 py-2 text-sm ${VERDICT_COPY[result.verdict].color}`}
-        >
-          <div className="text-xs font-semibold">
-            {VERDICT_COPY[result.verdict].label}
-          </div>
-          {result.reasoning && (
-            <p className="mt-1 text-xs leading-relaxed opacity-90">
-              {result.reasoning}
-            </p>
-          )}
-          {result.verdict === "add" && result.added_id && (
-            <p className="mt-1.5 text-[11px] opacity-70">
-              Scroll down — the new idea is at the top of your list.
-            </p>
-          )}
-        </div>
-      )}
+      {result?.verdict &&
+        (() => {
+          const { Icon, label, color } = VERDICT_COPY[result.verdict];
+          return (
+            <div
+              className={`mt-3 rounded-md border px-3 py-2 text-sm ${color}`}
+            >
+              <div className="flex items-center gap-1.5 text-xs font-semibold">
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                {label}
+              </div>
+              {result.reasoning && (
+                <p className="mt-1 text-xs leading-relaxed opacity-90">
+                  {result.reasoning}
+                </p>
+              )}
+              {result.verdict === "add" && result.added_id && (
+                <p className="mt-1.5 text-[11px] opacity-70">
+                  Scroll down — the new idea is at the top of your list.
+                </p>
+              )}
+            </div>
+          );
+        })()}
     </div>
   );
 }

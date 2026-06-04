@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Check, Loader2 } from "lucide-react";
 import { useConfirm } from "@/components/confirm-dialog";
 
 export function ServiceKeyForm({
@@ -100,10 +101,16 @@ export function ServiceKeyForm({
         <button
           type="submit"
           disabled={status === "saving" || value.length === 0}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+          className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
         >
+          {status === "saving" && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          )}
+          {status === "saved" && (
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
           {status === "saving"
-            ? "Saving…"
+            ? "Saving"
             : status === "saved"
               ? "Saved"
               : existingLast4

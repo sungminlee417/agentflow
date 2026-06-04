@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { CheckCircle2, CircleDashed, CircleSlash } from "lucide-react";
 import { Modal } from "@/components/modal";
 import { OAuthConnect } from "@/components/oauth-connect";
 import { ServiceKeyForm } from "@/components/service-key-form";
@@ -60,25 +61,26 @@ function accountTitle(a: ConnectedAccount): string {
 }
 
 function StatusPill({ status, count }: { status: Status; count: number }) {
+  // Icon + color so colorblind users can still distinguish states.
   if (status === "connected") {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+        <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
         {count} connected
       </span>
     );
   }
   if (status === "configured") {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+        <CircleDashed className="h-3 w-3" aria-hidden="true" />
         Not connected
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
-      <span className="h-1.5 w-1.5 rounded-full bg-neutral-400" />
+    <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+      <CircleSlash className="h-3 w-3" aria-hidden="true" />
       Not configured
     </span>
   );

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   getOAuthCredentials,
@@ -21,7 +22,7 @@ const OAUTH_PROVIDERS: Array<{
   label: string;
   group: "code" | "social";
   description: string;
-  hint?: string;
+  hintTemplate: string;
   uploadHint?: { label: string; description: string };
 }> = [
   {
@@ -29,22 +30,22 @@ const OAUTH_PROVIDERS: Array<{
     label: "GitHub",
     group: "code",
     description:
-      "Read code, manage issues, open PRs on your behalf. Used by the Code Manager.",
-    hint:
-      "Create your OAuth app at https://github.com/settings/developers — Authorization callback URL: http://localhost:3000/api/oauth/github/callback",
+      "Read code, manage issues, and open PRs on your behalf.",
+    hintTemplate:
+      "Create your OAuth app at https://github.com/settings/developers. Set the Authorization callback URL to {callback}.",
   },
   {
     provider: "youtube",
     label: "YouTube",
     group: "social",
     description:
-      "Read your videos, analytics, and search the platform. Used by the Social Media Manager.",
-    hint:
-      "Create an OAuth client at https://console.cloud.google.com → Credentials. Enable YouTube Data API v3 + Analytics API. Redirect URI: http://localhost:3000/api/oauth/youtube/callback",
+      "Read your videos, analytics, and search the platform for niche signal.",
+    hintTemplate:
+      "Create an OAuth client at https://console.cloud.google.com → Credentials. Enable YouTube Data API v3 + Analytics API. Set the redirect URI to {callback}.",
     uploadHint: {
       label: "YouTube Studio export",
       description:
-        "Optional CSV exports from Studio for deeper retention/impressions history.",
+        "Optional CSV exports from Studio for deeper retention + impressions history.",
     },
   },
   {
@@ -52,9 +53,9 @@ const OAUTH_PROVIDERS: Array<{
     label: "TikTok",
     group: "social",
     description:
-      "Read your videos and profile stats. Used by the Social Media Manager.",
-    hint:
-      "Create an app at https://developers.tiktok.com, enable Login Kit + Display API. HTTPS callback required — use ngrok for local dev. Add yourself as a Sandbox tester.",
+      "Read your videos and profile stats to ground every idea in what your audience rewards.",
+    hintTemplate:
+      "Create an app at https://developers.tiktok.com — enable Login Kit + Display API. HTTPS callback URL: {callback}. Add yourself as a Sandbox tester until your app passes review.",
     uploadHint: {
       label: "TikTok Studio export",
       description:
@@ -66,16 +67,25 @@ const OAUTH_PROVIDERS: Array<{
     label: "Instagram",
     group: "social",
     description:
-      "Read your media, insights, comments. Reply to comments. Used by the Social Media Manager.",
-    hint:
-      "Create a Business app at https://developers.facebook.com, add Instagram product, set up Instagram Login. HTTPS callback required (ngrok). Add yourself as Developer/Admin/Tester.",
+      "Read your media, insights, and comments. Reply to comments on your behalf.",
+    hintTemplate:
+      "Create a Business app at https://developers.facebook.com — add the Instagram product and set up Instagram Login. HTTPS callback URL: {callback}. Add yourself as a Developer / Admin / Tester until your app passes review.",
     uploadHint: {
-      label: "Instagram Insights export",
+      label: "Insights export",
       description:
         "Optional Meta Business Suite exports for deeper historical signal.",
     },
   },
 ];
+
+type ProviderConfig = (typeof OAUTH_PROVIDERS)[number];
+
+function hintFor(p: ProviderConfig, origin: string): string {
+  return p.hintTemplate.replace(
+    "{callback}",
+    `${origin}/api/oauth/${p.provider}/callback`,
+  );
+}
 
 export default async function IntegrationsPage({
   searchParams,
@@ -92,6 +102,14 @@ export default async function IntegrationsPage({
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  // Resolve the user-visible origin so OAuth callback URL hints show
+  // the actual hostname they'll need to paste into the provider
+  // console — not a hardcoded localhost.
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") ?? "http";
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const origin = `${proto}://${host}`;
 
   const [
     { data: integrations },
@@ -185,7 +203,7 @@ export default async function IntegrationsPage({
       label: p.label,
       group: p.group,
       description: p.description,
-      hint: p.hint,
+      hint: hintFor(p, origin),
       accounts,
       credentialsConfigured: !!source,
       credentialsLast4: credsByProvider.get(p.provider) ?? null,

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Check, Loader2 } from "lucide-react";
 import { useConfirm } from "@/components/confirm-dialog";
 
 // OAuth credentials form + Connect button. Each user supplies their own
@@ -212,10 +213,16 @@ export function OAuthConnect({
                 clientId.length === 0 ||
                 clientSecret.length === 0
               }
-              className="w-full rounded-md bg-neutral-900 px-4 py-2 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-neutral-900 px-4 py-2 text-xs font-medium text-white transition hover:bg-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
             >
+              {credStatus === "saving" && (
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              )}
+              {credStatus === "saved" && (
+                <Check className="h-3 w-3" aria-hidden="true" />
+              )}
               {credStatus === "saving"
-                ? "Saving…"
+                ? "Saving"
                 : credStatus === "saved"
                   ? "Saved"
                   : credentialsConfigured
