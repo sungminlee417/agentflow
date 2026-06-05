@@ -367,11 +367,68 @@ export function VideoIdeasList({
     [pendingIdeas, scheduledIdeas, postedIdeas],
   );
 
+  // Sort options vary by tab. Working on always sorts by manual
+  // priority (the whole point of the tab) so no sort selector is
+  // shown there. Ideas + Posted each get their own option set.
+  type IdeasSort = "newest" | "oldest" | "expiring";
+  type PostedSort = "recent_post" | "oldest_post" | "best" | "worst";
+  const [ideasSort, setIdeasSort] = useState<IdeasSort>("newest");
+  const [postedSort, setPostedSort] = useState<PostedSort>("recent_post");
+
   const filtered = useMemo(() => {
     const base = baseForView(view);
-    if (filter === "all") return base;
-    return base.filter((i) => i.kind === filter);
-  }, [view, baseForView, filter]);
+    const byKind = filter === "all" ? base : base.filter((i) => i.kind === filter);
+    // The base lists are already sorted by their natural default
+    // (pending: newest, scheduled: priority, posted: most recent
+    // post). Only re-sort when the user picked a non-default option.
+    if (view === "scheduled") return byKind;
+    if (view === "pending") {
+      if (ideasSort === "newest") return byKind;
+      const sorted = [...byKind];
+      if (ideasSort === "oldest") {
+        sorted.sort(
+          (a, b) =>
+            new Date(a.created_at).getTime() -
+            new Date(b.created_at).getTime(),
+        );
+      } else if (ideasSort === "expiring") {
+        sorted.sort(
+          (a, b) =>
+            new Date(a.expires_at).getTime() -
+            new Date(b.expires_at).getTime(),
+        );
+      }
+      return sorted;
+    }
+    // posted
+    if (postedSort === "recent_post") return byKind;
+    const sorted = [...byKind];
+    if (postedSort === "oldest_post") {
+      sorted.sort((a, b) => {
+        const aT = new Date(a.posted_at ?? a.created_at).getTime();
+        const bT = new Date(b.posted_at ?? b.created_at).getTime();
+        return aT - bT;
+      });
+    } else if (postedSort === "best") {
+      sorted.sort(
+        (a, b) =>
+          (b.performance_stats?.ratio ?? -1) -
+          (a.performance_stats?.ratio ?? -1),
+      );
+    } else if (postedSort === "worst") {
+      // Push unreviewed (ratio null) to the bottom — "worst" only
+      // means anything once a verdict exists.
+      sorted.sort((a, b) => {
+        const ar = a.performance_stats?.ratio;
+        const br = b.performance_stats?.ratio;
+        if (ar == null && br == null) return 0;
+        if (ar == null) return 1;
+        if (br == null) return -1;
+        return ar - br;
+      });
+    }
+    return sorted;
+  }, [view, baseForView, filter, ideasSort, postedSort]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {
@@ -987,27 +1044,56 @@ export function VideoIdeasList({
         })}
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {(["all", "pattern", "rising", "trend", "competitor", "seasonal"] as KindFilter[]).map(
-          (k) => {
-            const active = filter === k;
-            const label = k === "all" ? "All" : KIND_LABELS[k];
-            return (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setFilter(k)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                  active
-                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                    : "border border-neutral-300 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-900"
-                }`}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex flex-wrap gap-2">
+          {(["all", "pattern", "rising", "trend", "competitor", "seasonal"] as KindFilter[]).map(
+            (k) => {
+              const active = filter === k;
+              const label = k === "all" ? "All" : KIND_LABELS[k];
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setFilter(k)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                    active
+                      ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                      : "border border-neutral-300 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-900"
+                  }`}
+                >
+                  {label}{" "}
+                  <span className="ml-1 opacity-60">{counts[k] ?? 0}</span>
+                </button>
+              );
+            },
+          )}
+        </div>
+        {view !== "scheduled" && (
+          <label className="flex items-center gap-1.5 text-xs text-neutral-500">
+            <span className="hidden sm:inline">Sort</span>
+            {view === "pending" ? (
+              <select
+                value={ideasSort}
+                onChange={(e) => setIdeasSort(e.target.value as IdeasSort)}
+                className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
               >
-                {label}{" "}
-                <span className="ml-1 opacity-60">{counts[k] ?? 0}</span>
-              </button>
-            );
-          },
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="expiring">Expiring soonest</option>
+              </select>
+            ) : (
+              <select
+                value={postedSort}
+                onChange={(e) => setPostedSort(e.target.value as PostedSort)}
+                className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              >
+                <option value="recent_post">Most recent post</option>
+                <option value="oldest_post">Oldest post</option>
+                <option value="best">Best performing</option>
+                <option value="worst">Worst performing</option>
+              </select>
+            )}
+          </label>
         )}
       </div>
 
