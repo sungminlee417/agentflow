@@ -102,11 +102,39 @@ function normalizeKind(raw: string): GeneratedIdea["kind"] {
   return "pattern";
 }
 
+type EvalReview = {
+  title: string;
+  kind: string;
+  format: string | null;
+  verdict: string | null;
+  ratio: number | null;
+  takeaways: string | null;
+};
+
+function reviewsBlockForEvaluator(reviews: EvalReview[]): string {
+  if (reviews.length === 0) return "";
+  const lines: string[] = [
+    "",
+    "PRIOR POST-MORTEMS — ground truth from videos this creator already shipped. Use these to judge whether the spark fits or repeats a past miss:",
+  ];
+  for (const r of reviews) {
+    const ratioStr = r.ratio != null ? `${r.ratio.toFixed(2)}× median` : "unrated";
+    lines.push(
+      `- "${r.title}" (${r.kind}, ${r.format ?? "?"}): ${r.verdict ?? "?"} · ${ratioStr}`,
+    );
+    if (r.takeaways) {
+      lines.push(`  Learnings: ${r.takeaways}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function buildPrompt(args: {
   rawIdea: string;
   today: string;
   hasApify: boolean;
   preferences: string | null;
+  reviews: EvalReview[];
 }): string {
   const prefBlock =
     args.preferences && args.preferences.trim()
@@ -121,7 +149,7 @@ ${args.preferences.trim()}`
 Today is ${args.today}.
 
 User's raw idea spark:
-"${args.rawIdea}"${prefBlock}
+"${args.rawIdea}"${prefBlock}${reviewsBlockForEvaluator(args.reviews)}
 
 Required procedure:
 1. tiktok_top_my_videos (top_n 10, from_history 100) — what hits for this creator.
@@ -134,7 +162,9 @@ Required procedure:
 Verdict rules:
 - "add" → it clearly fits the creator's winning pattern, you have a concrete plan, and you're confident it would perform on par with or above their median. Fully flesh out the idea (every upload-ready field, every virality field).
 - "needs_work" → the spark has potential but needs reframing to fit. Provide a SPECIFIC reframing in reasoning, and partially fill the idea (title + format + rationale + a couple of fields). Skip script/full content — the user should iterate before you commit to those.
-- "pass" → it's off-niche, contradicts what works for this creator, OR the format is saturated with poor returns. State the specific reason ("your top 10 are all comparison hooks; solo performance of an obscure piece would underperform your median by 40-60%" or "#fingerstyle currently has 30+ posts in this exact format with engagement dropping ~40% vs niche median"). Do NOT include the idea object in the response.
+- "pass" → it's off-niche, contradicts what works for this creator, OR the format is saturated with poor returns. State the specific reason ("your top 10 are all comparison hooks; solo performance of an obscure piece would underperform your median by 40-60%", "#fingerstyle currently has 30+ posts in this exact format with engagement dropping ~40% vs niche median", or "your last underperformed video was the same solo-performance format — see the post-mortem"). Do NOT include the idea object in the response.
+
+If any prior post-mortem above is RELEVANT to the spark — same format, same hook style, similar topic — your reasoning MUST cite it by title (e.g. 'Your "Bach Prelude solo" hit 0.43× median — same solo-performance format. Reframe to comparison or pass.'). The post-mortems are ground truth; ignoring them when they apply is the worst kind of judgment.
 
 Return EXACTLY this JSON object and nothing else:
 {
@@ -296,12 +326,59 @@ export async function runEvaluateIdea({
     console.error("[evaluate-idea-agent] failed to load preferences:", err);
   }
 
+  // Prior post-mortems — same wiring as the bulk generator so the
+  // evaluator can compare a user spark against actual ground truth.
+  const reviews: EvalReview[] = [];
+  try {
+    const { data: reviewed } = await supabase
+      .from("video_ideas")
+      .select(
+        "title, kind, format, performance_verdict, performance_stats, performance_review",
+      )
+      .eq("user_id", userId)
+      .eq("integration_id", integrationId)
+      .not("performance_verdict", "is", null)
+      .order("last_reviewed_at", { ascending: false })
+      .limit(8);
+    for (const row of (reviewed ?? []) as Array<{
+      title: string;
+      kind: string;
+      format: string | null;
+      performance_verdict: string | null;
+      performance_stats: { ratio?: number } | null;
+      performance_review: string | null;
+    }>) {
+      let takeaways: string | null = null;
+      if (row.performance_review) {
+        const tIdx = row.performance_review.indexOf("Takeaways");
+        if (tIdx >= 0) {
+          takeaways = row.performance_review
+            .slice(tIdx)
+            .replace(/^[#\s]*Takeaways[^\n]*\n?/, "")
+            .trim()
+            .slice(0, 400);
+        }
+      }
+      reviews.push({
+        title: row.title,
+        kind: row.kind,
+        format: row.format,
+        verdict: row.performance_verdict,
+        ratio: row.performance_stats?.ratio ?? null,
+        takeaways,
+      });
+    }
+  } catch (err) {
+    console.error("[evaluate-idea-agent] failed to load reviews:", err);
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   const system = buildPrompt({
     rawIdea: trimmed,
     today,
     hasApify: connected.includes("apify"),
     preferences,
+    reviews,
   });
 
   try {

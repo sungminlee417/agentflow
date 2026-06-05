@@ -198,7 +198,8 @@ Critical:
 - Each title must be specific and recordable — "Cover Hotel California — acoustic vs classical" not "do another comparison video".
 - hook must be the actual first spoken/shown line.
 - format should be short ("acoustic vs classical comparison", "solo performance with text overlay").
-- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").
+- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").${hasReviews ? `
+  WHEN A PRIOR POST-MORTEM ABOVE IS RELEVANT (same format, same hook style, similar topic), the rationale MUST cite it by title and verdict. Examples: "Extends your 'Hotel California — acoustic vs classical' hit (2.1× median)." Or: "Replaces the underperforming 'Bach Prelude solo' format (0.43×) — comparison hook instead." Ignoring an applicable post-mortem when one exists is the worst failure mode here.` : ""}
 - saturation_warning (NULL or short string): only set this when you saw the SPECIFIC format or topic showing saturation signals (lots of similar recent videos with below-niche-median engagement). Be specific — e.g. "Acoustic-vs-classical comparisons of Bach pieces have 30+ posts in #fingerstyle this month with median engagement dropping ~40% — twist needed to stand out (suggested in the script)." Leave null when there's no saturation concern.${hasReviews ? `
 - The post-mortems above are GROUND TRUTH from videos this creator already shipped. Steer toward formats/hooks that hit; steer away from ones that underperformed. When you reuse a winning pattern, say so in the rationale.` : ""}
 
