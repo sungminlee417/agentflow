@@ -11,6 +11,12 @@ export const metadata: Metadata = {
   title: "Video ideas",
 };
 
+// Force-dynamic so router.refresh() always re-runs the data fetch.
+// Without this, Next can decide a route is statically-rendered-with-
+// dynamic-functions and end up serving slightly stale ideas data
+// after a status PATCH.
+export const dynamic = "force-dynamic";
+
 // Only providers that the video-ideas agent currently supports.
 const SUPPORTED_PROVIDERS = new Set(["tiktok"]);
 

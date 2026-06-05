@@ -688,6 +688,11 @@ export function VideoIdeasList({
       toast.error(`Update failed (${res.status}).`);
       return;
     }
+    // Re-fetch server-side so the page query reflects the new status.
+    // The optimistic update above keeps the card animation-snappy in
+    // the meantime; this just guarantees server-truth on the next
+    // render (belt-and-suspenders against any stale-state edge case).
+    router.refresh();
     // Confirm the action when it would change tabs — the user might
     // miss the silent disappearance. Offer a jump-to action.
     if (status === "scheduled" && wasOnIdeas) {
@@ -709,7 +714,9 @@ export function VideoIdeasList({
     if (!res.ok) {
       setIdeas(prev);
       toast.error(`Delete failed (${res.status}).`);
+      return;
     }
+    router.refresh();
   }
 
   // Group accounts by provider for the selector.
