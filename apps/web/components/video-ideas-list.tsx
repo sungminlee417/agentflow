@@ -36,6 +36,7 @@ import { Modal } from "@/components/modal";
 import { MarkDoneModal } from "@/components/mark-done-modal";
 import { QuickAddIdea } from "@/components/quick-add-idea";
 import { AccountPreferences } from "@/components/account-preferences";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export type VideoIdeaRow = {
   id: string;
@@ -174,6 +175,7 @@ export function VideoIdeasList({
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [ideas, setIdeas] = useState<VideoIdeaRow[]>(initial);
   // Keep local state in sync with server props after router.refresh().
   useEffect(() => {
@@ -719,6 +721,27 @@ export function VideoIdeasList({
     router.refresh();
   }
 
+  // Posted-card delete needs a confirm — it nukes the linked video,
+  // the performance review, and the stats history. Reusable enough to
+  // live alongside `remove` (which is the bare optimistic delete for
+  // pending Dismiss).
+  async function deletePosted(id: string) {
+    const idea = ideas.find((r) => r.id === id);
+    if (!idea) return;
+    const ok = await confirm({
+      title: `Delete ${idea.title.slice(0, 60)}?`,
+      description: idea.performance_review
+        ? "This permanently removes the idea, the linked TikTok video, and the post-mortem review. Future generations lose this signal."
+        : "This permanently removes the idea and any linked posting info.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
+    await remove(id);
+    toast.success("Deleted.");
+    return;
+  }
+
   // Group accounts by provider for the selector.
   const accountsByProvider = useMemo(() => {
     const map = new Map<string, IdeasAccount[]>();
@@ -1040,6 +1063,7 @@ export function VideoIdeasList({
                     setStatus={setStatus}
                     setMarkDoneIdeaId={setMarkDoneIdeaId}
                     remove={remove}
+                    deletePosted={deletePosted}
                   />
                 </SortableIdeaCard>
               ))}
@@ -1059,6 +1083,7 @@ export function VideoIdeasList({
                 setStatus={setStatus}
                 setMarkDoneIdeaId={setMarkDoneIdeaId}
                 remove={remove}
+                deletePosted={deletePosted}
               />
             </article>
           ))
@@ -1090,6 +1115,7 @@ export function VideoIdeasList({
           }}
         />
       )}
+      {confirmDialog}
     </div>
   );
 }
@@ -1482,6 +1508,7 @@ function IdeaCardBody({
   setStatus,
   setMarkDoneIdeaId,
   remove,
+  deletePosted,
 }: {
   i: VideoIdeaRow;
   reviewingId: string | null;
@@ -1490,6 +1517,7 @@ function IdeaCardBody({
   setStatus: (id: string, status: VideoIdeaRow["status"]) => void;
   setMarkDoneIdeaId: (id: string) => void;
   remove: (id: string) => void;
+  deletePosted: (id: string) => void;
 }) {
   const hasFullContent =
     !!i.script || !!i.description || (i.hashtags?.length ?? 0) > 0;
@@ -1612,6 +1640,15 @@ function IdeaCardBody({
               Remove from plan
             </button>
           </>
+        )}
+        {i.status === "done" && (
+          <button
+            type="button"
+            onClick={() => deletePosted(i.id)}
+            className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/30 dark:hover:text-red-400"
+          >
+            Delete
+          </button>
         )}
       </div>
     </>
