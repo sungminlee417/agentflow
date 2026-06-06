@@ -86,6 +86,38 @@ export type VideoIdeaRow = {
   } | null;
   last_reviewed_at: string | null;
   next_review_at: string | null;
+  /** Per-platform posts. Multi-row when the same shoot landed on more
+   *  than one platform (TikTok + YT Shorts + IG Reels). Empty array
+   *  for ideas that haven't been marked posted yet. */
+  posts?: PostedRow[];
+};
+
+export type PostedRow = {
+  id: string;
+  integration_id: string;
+  platform: string;
+  posted_video_id: string;
+  posted_video_url: string | null;
+  posted_at: string;
+  performance_verdict:
+    | "hit"
+    | "on_track"
+    | "underperformed"
+    | "too_early"
+    | null;
+  performance_score: number | null;
+  performance_review: string | null;
+  performance_stats: {
+    views?: number;
+    likes?: number;
+    comments?: number;
+    shares?: number;
+    engagement_rate?: number;
+    baseline_median_rate?: number;
+    ratio?: number;
+  } | null;
+  last_reviewed_at: string | null;
+  next_review_at: string | null;
 };
 
 export type IdeasAccount = {
@@ -95,6 +127,12 @@ export type IdeasAccount = {
   displayName: string | null;
   accountLabel: string | null;
   providerAccountId: string;
+};
+
+export type LinkableAccount = {
+  id: string;
+  platform: string;
+  label: string;
 };
 
 export type ActiveGenerationJob = {
@@ -160,6 +198,7 @@ function accountTitle(a: IdeasAccount): string {
 
 export function VideoIdeasList({
   accounts,
+  linkableAccounts = [],
   selectedAccountId,
   initial,
   targetCount,
@@ -167,6 +206,7 @@ export function VideoIdeasList({
   initialActiveJob,
 }: {
   accounts: IdeasAccount[];
+  linkableAccounts?: LinkableAccount[];
   selectedAccountId: string | null;
   initial: VideoIdeaRow[];
   targetCount: number;
@@ -1180,6 +1220,12 @@ export function VideoIdeasList({
         open={markDoneIdeaId !== null}
         ideaId={markDoneIdeaId}
         ideaTitle={markDoneIdea?.title ?? null}
+        targets={linkableAccounts.map((a) => ({
+          id: a.id,
+          platform: a.platform,
+          label: a.label,
+          isSource: a.id === markDoneIdea?.integration_id,
+        }))}
         onClose={() => setMarkDoneIdeaId(null)}
         onLinked={() => {
           router.refresh();
@@ -1472,6 +1518,12 @@ function formatUntil(iso: string): string {
   return `in ${Math.round(ms / 86_400_000)}d`;
 }
 
+const PLATFORM_LABELS: Record<string, string> = {
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  instagram: "Instagram",
+};
+
 function PerformanceBlock({
   i,
   reviewing,
@@ -1481,10 +1533,31 @@ function PerformanceBlock({
   reviewing: boolean;
   onReview: () => void;
 }) {
+  // Prefer the new per-platform posts list; fall back to the
+  // denormalised single-post columns on the idea row for ideas that
+  // haven't been re-linked since the multi-platform migration.
+  const posts = i.posts ?? [];
+  if (posts.length > 0) {
+    return (
+      <div className="mt-3 space-y-2">
+        {posts.map((p) => (
+          <PostPerfRow
+            key={p.id}
+            post={p}
+            reviewing={reviewing}
+            onReview={onReview}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  // Legacy single-post render — preserved for backward compat. Once
+  // the migration backfills every idea, this branch becomes dead
+  // code we can delete.
   const stats = i.performance_stats;
   const verdict = i.performance_verdict;
   const hasReview = !!i.performance_review;
-
   return (
     <div className="mt-3 rounded-md border border-neutral-200 bg-neutral-50/60 p-3 dark:border-neutral-800 dark:bg-neutral-900/60">
       <div className="flex flex-wrap items-center gap-2">
@@ -1565,6 +1638,102 @@ function PerformanceBlock({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function PostPerfRow({
+  post,
+  reviewing,
+  onReview,
+}: {
+  post: PostedRow;
+  reviewing: boolean;
+  onReview: () => void;
+}) {
+  const stats = post.performance_stats;
+  const verdict = post.performance_verdict;
+  const hasReview = !!post.performance_review;
+  const platformLabel = PLATFORM_LABELS[post.platform] ?? post.platform;
+  return (
+    <div className="rounded-md border border-neutral-200 bg-neutral-50/60 p-3 dark:border-neutral-800 dark:bg-neutral-900/60">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center rounded-full bg-neutral-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+          {platformLabel}
+        </span>
+        {verdict ? (
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${VERDICT_COLORS[verdict]}`}
+          >
+            {VERDICT_LABELS[verdict]}
+            {stats?.ratio != null && verdict !== "too_early" && (
+              <span className="ml-1 opacity-75">
+                · {stats.ratio.toFixed(2)}× median
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="inline-flex items-center rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+            Review pending
+          </span>
+        )}
+        <span className="text-[11px] text-neutral-500">
+          posted {formatRelative(post.posted_at)}
+        </span>
+        {!verdict && post.next_review_at && (
+          <span className="text-[11px] text-neutral-500">
+            · next review {formatUntil(post.next_review_at)}
+          </span>
+        )}
+        {post.posted_video_url && (
+          <a
+            href={post.posted_video_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto text-[11px] text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
+          >
+            Open on {platformLabel} ↗
+          </a>
+        )}
+      </div>
+
+      {stats && (stats.views ?? 0) > 0 && (
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[11px]">
+          <Stat label="Views" value={(stats.views ?? 0).toLocaleString()} />
+          <Stat label="Likes" value={(stats.likes ?? 0).toLocaleString()} />
+          <Stat
+            label="Comments"
+            value={(stats.comments ?? 0).toLocaleString()}
+          />
+          <Stat label="Shares" value={(stats.shares ?? 0).toLocaleString()} />
+        </div>
+      )}
+
+      {hasReview && (
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100">
+            Read {platformLabel} post-mortem
+          </summary>
+          <div className="mt-1.5 whitespace-pre-wrap text-neutral-700 dark:text-neutral-300">
+            {post.performance_review}
+          </div>
+        </details>
+      )}
+
+      <div className="mt-2">
+        <button
+          type="button"
+          onClick={onReview}
+          disabled={reviewing}
+          className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-[11px] text-neutral-700 transition hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900"
+        >
+          {reviewing
+            ? "Reviewing…"
+            : hasReview
+              ? "Re-review now"
+              : "Review now"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import {
   VideoIdeasList,
   type VideoIdeaRow,
   type IdeasAccount,
+  type LinkableAccount,
   type ActiveGenerationJob,
 } from "@/components/video-ideas-list";
 
@@ -64,6 +65,30 @@ export default async function VideoIdeasPage({
       providerAccountId: i.provider_account_id as string,
     }));
 
+  // Every connected social-media integration the user could have
+  // posted to. Used by the Mark-Done modal to render one URL input
+  // per platform. Generation is still TikTok-only (so SUPPORTED_
+  // PROVIDERS gates the account selector), but linking is platform-
+  // agnostic.
+  const LINK_PROVIDERS = new Set(["tiktok", "youtube", "instagram"]);
+  const linkableAccounts: LinkableAccount[] = (integrations ?? [])
+    .filter((i) => LINK_PROVIDERS.has(i.provider as string))
+    .map((i) => {
+      const handle = i.handle as string | null;
+      const displayName = i.display_name as string | null;
+      const accountLabel = i.account_label as string | null;
+      const label =
+        accountLabel ??
+        (displayName && handle
+          ? `${displayName} (@${handle})`
+          : displayName ?? (handle ? `@${handle}` : "Account"));
+      return {
+        id: i.id as string,
+        platform: i.provider as string,
+        label,
+      };
+    });
+
   const sp = await searchParams;
   const selectedAccountId =
     accounts.find((a) => a.id === sp.account)?.id ?? accounts[0]?.id ?? null;
@@ -115,11 +140,49 @@ export default async function VideoIdeasPage({
         started_at: jobRow.started_at as string,
       };
     }
+
+    // Hydrate posts per idea (new multi-platform model). One row per
+    // (idea × platform). Group client-side so the renderer doesn't
+    // need another DB round-trip.
+    const ideaIds = ideas.map((i) => i.id);
+    if (ideaIds.length > 0) {
+      const { data: postRows } = await supabase
+        .from("video_idea_posts")
+        .select(
+          "id, idea_id, integration_id, platform, posted_video_id, posted_video_url, posted_at, performance_verdict, performance_score, performance_review, performance_stats, last_reviewed_at, next_review_at",
+        )
+        .in("idea_id", ideaIds)
+        .order("posted_at", { ascending: true });
+      const byIdea = new Map<string, VideoIdeaRow["posts"]>();
+      for (const p of postRows ?? []) {
+        const list = byIdea.get(p.idea_id as string) ?? [];
+        list.push({
+          id: p.id as string,
+          integration_id: p.integration_id as string,
+          platform: p.platform as string,
+          posted_video_id: p.posted_video_id as string,
+          posted_video_url: (p.posted_video_url as string | null) ?? null,
+          posted_at: p.posted_at as string,
+          performance_verdict:
+            (p.performance_verdict as VideoIdeaRow["performance_verdict"]) ??
+            null,
+          performance_score: (p.performance_score as number | null) ?? null,
+          performance_review: (p.performance_review as string | null) ?? null,
+          performance_stats:
+            (p.performance_stats as VideoIdeaRow["performance_stats"]) ?? null,
+          last_reviewed_at: (p.last_reviewed_at as string | null) ?? null,
+          next_review_at: (p.next_review_at as string | null) ?? null,
+        });
+        byIdea.set(p.idea_id as string, list);
+      }
+      ideas = ideas.map((i) => ({ ...i, posts: byIdea.get(i.id) ?? [] }));
+    }
   }
 
   return (
     <VideoIdeasList
       accounts={accounts}
+      linkableAccounts={linkableAccounts}
       selectedAccountId={selectedAccountId}
       initial={ideas}
       targetCount={targetCount}
