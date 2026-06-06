@@ -65,36 +65,52 @@ export async function GET(request: NextRequest) {
   }
 
   // Fetch the YouTube channel identity. mine=true returns the channel
-  // owned by the authenticated user.
+  // owned by the authenticated user. The Google account must have an
+  // explicit YouTube channel created — a Gmail address by itself
+  // does NOT have a channel, even though it can sign in.
   let accountId: string | null = null;
   let handle: string | null = null;
   let displayName: string | null = null;
+  let fetchErr: string | null = null;
   try {
     const chRes = await fetch(
       "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
       { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
     );
-    if (chRes.ok) {
+    if (!chRes.ok) {
+      fetchErr = `channels_api_${chRes.status}:${(await chRes.text()).slice(0, 200)}`;
+    } else {
       const json = (await chRes.json()) as {
         items?: Array<{
           id?: string;
           snippet?: { title?: string; customUrl?: string };
         }>;
       };
-      const ch = json.items?.[0];
-      accountId = ch?.id ?? null;
-      handle = ch?.snippet?.customUrl ?? null;
-      displayName = ch?.snippet?.title ?? null;
+      if (!json.items || json.items.length === 0) {
+        // Successful 200 but no channel. Almost always means the Google
+        // account hasn't created a YouTube channel yet — Google accounts
+        // and YouTube channels are decoupled; the user has to make one
+        // at youtube.com/create_channel.
+        fetchErr = "no_youtube_channel";
+      } else {
+        const ch = json.items[0];
+        accountId = ch?.id ?? null;
+        handle = ch?.snippet?.customUrl ?? null;
+        displayName = ch?.snippet?.title ?? null;
+      }
     }
   } catch (err) {
+    fetchErr = `channels_api_threw:${err instanceof Error ? err.message : "unknown"}`;
     console.error("youtube identity fetch failed:", err);
   }
 
   if (!accountId) {
+    const reason = fetchErr ?? "youtube_identity_unavailable";
+    console.error(`[oauth/youtube] connect failed: ${reason}`);
     return NextResponse.redirect(
       publicUrl(
         request,
-        `/integrations?error=${encodeURIComponent("youtube_identity_unavailable")}`,
+        `/integrations?error=${encodeURIComponent(reason)}`,
       ),
     );
   }
