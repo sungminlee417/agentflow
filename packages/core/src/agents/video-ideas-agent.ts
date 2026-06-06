@@ -236,6 +236,8 @@ function tiktokPrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are a TikTok content strategist. Produce exactly ${count} fresh video ideas as a JSON object.
 
+OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence. The response must START with the literal character \`{\` and END with \`}\`. Anything else fails the parser and wastes the run. The schema is at the bottom of this message — follow it exactly.
+
 Today is ${today}. Tools:
 ${describeAvailable(connected)}
 ${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}${platformsBlock(targetPlatforms)}
@@ -331,6 +333,8 @@ function youtubePrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are a YouTube Shorts content strategist. Produce exactly ${count} fresh Short ideas as a JSON object.
 
+OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence. The response must START with the literal character \`{\` and END with \`}\`. Anything else fails the parser and wastes the run. The schema is at the bottom of this message — follow it exactly.
+
 Today is ${today}. Tools:
 ${describeYouTubeAvailable()}
 ${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
@@ -418,6 +422,8 @@ function instagramPrompt(
 ): string {
   const hasReviews = recentReviews.length > 0;
   return `You are an Instagram Reels content strategist. Produce exactly ${count} fresh Reels ideas as a JSON object.
+
+OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence. The response must START with the literal character \`{\` and END with \`}\`. Anything else fails the parser and wastes the run. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
 ${describeInstagramAvailable()}
@@ -662,7 +668,11 @@ export async function runVideoIdeasAgent({
       ],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       tools: tools as any,
-      stopWhen: stepCountIs(25),
+      // Bounded at 15 steps. Beyond that the model is usually doing
+      // redundant searches rather than gathering new signal — every
+      // run we observed >15 ate Anthropic budget without producing
+      // better ideas.
+      stopWhen: stepCountIs(15),
       onStepFinish: async (step) => {
         stepCount += 1;
         if (onStep) {
@@ -675,21 +685,57 @@ export async function runVideoIdeasAgent({
       },
     });
 
-    const parsed = parseIdeas(result.text);
+    let parsed = parseIdeas(result.text);
+    let totalTokens = result.usage?.totalTokens ?? 0;
+
+    // Parse-failure retry. Sonnet sometimes ignores the JSON-only
+    // instruction and emits a narrative "Here's my analysis…" instead.
+    // Rather than throw away the whole run (which already paid for
+    // all the tool calls), feed the narrative back and ask for JSON
+    // only. No tools, no system context bloat — just reformat what's
+    // already in the assistant turn.
     if (!parsed) {
       const preview = result.text.slice(0, 500).replace(/\s+/g, " ");
-      console.error("[video-ideas-agent] could not parse ideas. raw:", preview);
+      console.warn(
+        "[video-ideas-agent] first parse failed, retrying as JSON-only reformat. raw:",
+        preview,
+      );
+      try {
+        const retry = await generateText({
+          model: getModel(aiProvider, apiKey, userModel),
+          system:
+            "You convert content-strategy analyses into a strict JSON schema. Your FINAL response is the JSON object only — no prose, no markdown, no code fence. Start with `{` and end with `}`.",
+          messages: [
+            {
+              role: "user",
+              content: `Convert the analysis below into exactly ${count} video ideas as a JSON object matching this schema:\n\n${SCHEMA_HINT}\n\nAnalysis to convert:\n\n${result.text}\n\nOutput the JSON only.`,
+            },
+          ],
+        });
+        parsed = parseIdeas(retry.text);
+        totalTokens += retry.usage?.totalTokens ?? 0;
+      } catch (err) {
+        console.error("[video-ideas-agent] retry call failed:", err);
+      }
+    }
+
+    if (!parsed) {
+      const preview = result.text.slice(0, 500).replace(/\s+/g, " ");
+      console.error(
+        "[video-ideas-agent] could not parse ideas after retry. raw:",
+        preview,
+      );
       return {
         ok: false,
         error: `Agent did not return valid JSON ideas. Preview: ${preview}`,
-        tokens: result.usage?.totalTokens ?? undefined,
+        tokens: totalTokens || undefined,
       };
     }
 
     return {
       ok: true,
       ideas: parsed.slice(0, count) as GeneratedIdea[],
-      tokens: result.usage?.totalTokens ?? undefined,
+      tokens: totalTokens || undefined,
     };
   } catch (err) {
     return {
@@ -698,6 +744,21 @@ export async function runVideoIdeasAgent({
     };
   }
 }
+
+// Compact schema hint used by the parse-failure retry. Kept tiny — the
+// retry doesn't need the per-platform packaging rules, just enough
+// shape that the model produces valid JSON.
+const SCHEMA_HINT = `{ "ideas":[{
+  "title":string, "hook":string, "format":string, "rationale":string,
+  "kind":"pattern"|"trend"|"rising"|"competitor"|"seasonal",
+  "source_refs":{...}, "hard_date":string, "saturation_warning":string|null,
+  "script":string, "post_title":string, "description":string,
+  "hashtags":[string], "cta":string, "visual_notes":string,
+  "optimal_post_window":string, "suggested_duration":string,
+  "thumbnail_concept":string, "engagement_hook":string,
+  "trending_sound":string|null,
+  "platforms":{ /* one of: tiktok={caption,hashtags}, youtube={title,description,hashtags}, instagram={caption,hashtags} */ }
+}] }`;
 
 function parseIdeas(text: string): GeneratedIdea[] | null {
   // Try (in order): the whole text, fenced JSON extracted from a code
