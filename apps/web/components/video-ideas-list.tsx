@@ -223,12 +223,21 @@ function accountTitle(a: IdeasAccount): string {
   return "Legacy account";
 }
 
-// Master /video-ideas page entry point. Renders one VideoIdeasGroup per
-// connected account, stacked. Cross-cutting modals (idea detail, mark-
-// done) live inside each group instance — the trade-off vs lifting them
-// to the parent is duplicated state, but each group's existing state
-// machinery (SSE refresh, drag-to-reorder, etc.) stays self-contained
-// and untouched.
+// Master /video-ideas page entry point. ONE unified flat feed across
+// every connected account, with a single "Refresh all" button that
+// fans out one parallel agent run per account. Each card shows a
+// platform chip; hovering it reveals the source account label so the
+// list itself stays tight (kind + status + title + 1-line hook).
+type IdeasSort = "newest" | "oldest" | "expiring";
+type PostedSort = "recent_post" | "oldest_post" | "best" | "worst";
+type GroupRefreshState = {
+  label: string;
+  count: number;
+  activeJobId: string | null;
+  done?: boolean;
+  failed?: boolean;
+};
+
 export function VideoIdeasList({
   groups,
   linkableAccounts,
@@ -238,185 +247,134 @@ export function VideoIdeasList({
   linkableAccounts: LinkableAccount[];
   allIdeas: VideoIdeaRow[];
 }) {
-  void allIdeas;
-  if (groups.length === 0) {
-    return (
-      <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
-        <div className="rounded-lg border border-dashed border-neutral-300 px-6 py-14 text-center dark:border-neutral-700">
-          <h2 className="text-base font-medium text-neutral-900 dark:text-neutral-100">
-            No accounts connected
-          </h2>
-          <p className="mt-2 text-sm text-neutral-500">
-            Connect a TikTok, YouTube, or Instagram account to start
-            generating ideas tailored to it.
-          </p>
-          <Link
-            href="/integrations"
-            className="mt-4 inline-block rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
-          >
-            Connect an account
-          </Link>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="mx-auto max-w-3xl space-y-10 px-4 py-6 sm:px-6 sm:py-8 md:py-10">
-      {groups.map((g) => (
-        <VideoIdeasGroup
-          key={g.account.id}
-          group={g}
-          linkableAccounts={linkableAccounts}
-        />
-      ))}
-    </div>
-  );
-}
-
-function VideoIdeasGroup({
-  group,
-  linkableAccounts = [],
-}: {
-  group: AccountGroup;
-  linkableAccounts?: LinkableAccount[];
-}) {
-  const { account, ideas: initial, targetCount, preferences } = group;
-  const selectedAccountId = account.id;
-  const initialActiveJob = group.activeJob;
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { confirm, dialog: confirmDialog } = useConfirm();
-  const [ideas, setIdeas] = useState<VideoIdeaRow[]>(initial);
-  // Keep local state in sync with server props after router.refresh().
+
+  // Lookup tables built once per render.
+  const accountById = useMemo(() => {
+    const m = new Map<string, IdeasAccount>();
+    for (const g of groups) m.set(g.account.id, g.account);
+    return m;
+  }, [groups]);
+
+  // The full ideas list — initially server-fetched, then kept in sync
+  // with optimistic updates + router.refresh() round-trips.
+  const [ideas, setIdeas] = useState<VideoIdeaRow[]>(allIdeas);
   useEffect(() => {
-    setIdeas(initial);
-  }, [initial]);
-  const [target, setTarget] = useState(targetCount);
-  useEffect(() => {
-    setTarget(targetCount);
-  }, [targetCount]);
+    setIdeas(allIdeas);
+  }, [allIdeas]);
+
+  // Global view + filter state. ONE set of tabs, ONE filter bar.
+  const [view, setView] = useState<"pending" | "scheduled" | "posted">(
+    "pending",
+  );
   const [filter, setFilter] = useState<KindFilter>("all");
-  // Track whether a generation is in flight either because we just
-  // started it via SSE, or because the page loaded with an active job
-  // already running server-side (user navigated away and came back).
-  const [refreshing, setRefreshing] = useState(!!initialActiveJob);
-  const [activeJobId, setActiveJobId] = useState<string | null>(
-    initialActiveJob?.id ?? null,
+  const [ideasSort, setIdeasSort] = useState<IdeasSort>("newest");
+  const [postedSort, setPostedSort] = useState<PostedSort>("recent_post");
+
+  // Modal state.
+  const [detailIdeaId, setDetailIdeaId] = useState<string | null>(null);
+  const [markDoneIdeaId, setMarkDoneIdeaId] = useState<string | null>(null);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const detailIdea = useMemo(
+    () => ideas.find((i) => i.id === detailIdeaId) ?? null,
+    [ideas, detailIdeaId],
   );
-  const [progress, setProgress] = useState<{
-    count: number;
-    label: string;
-  } | null>(
-    initialActiveJob
-      ? {
-          count: initialActiveJob.step_count,
-          label: initialActiveJob.step_label,
+  const markDoneIdea = useMemo(
+    () => ideas.find((i) => i.id === markDoneIdeaId) ?? null,
+    [ideas, markDoneIdeaId],
+  );
+
+  // Per-account refresh state. Each entry = a currently-active or
+  // recently-completed stream for that integration. The aggregate
+  // progress strip at the top reads from this Map.
+  const [refreshing, setRefreshing] = useState<Map<string, GroupRefreshState>>(
+    () => {
+      const m = new Map<string, GroupRefreshState>();
+      for (const g of groups) {
+        if (g.activeJob) {
+          m.set(g.account.id, {
+            label: g.activeJob.step_label,
+            count: g.activeJob.step_count,
+            activeJobId: g.activeJob.id,
+          });
         }
-      : null,
+      }
+      return m;
+    },
   );
+  // Abort controllers per account so a follow-up "Refresh all" while
+  // an earlier run is still inflight cleanly cancels the previous fetch.
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [savingTarget, setSavingTarget] = useState(false);
 
-  // Abort controller for the in-flight SSE request from /api/video-ideas/
-  // refresh. Lives in a ref so account-switching can reach in and cancel
-  // it — without this, the dead stream from the previous account keeps
-  // pushing progress / done / error events into the current account's
-  // view, and "Generated N ideas" banners get attributed to the wrong
-  // selection.
-  const refreshAbortRef = useRef<AbortController | null>(null);
-
-  // When the user switches accounts mid-generation, cut everything tied
-  // to the previous account: kill the SSE fetch, drop the job-poll
-  // identity, clear the progress card / banners. The polling effect
-  // keys on activeJobId, so setting it to null naturally stops the
-  // 2.5s loop without needing to touch it directly.
+  // Poll any active job ids that we adopted from server state. This is
+  // the safety net for SSE drops: if a stream dies, the job row keeps
+  // updating server-side, so we poll on a slow loop.
   useEffect(() => {
-    refreshAbortRef.current?.abort();
-    refreshAbortRef.current = null;
-    setActiveJobId(initialActiveJob?.id ?? null);
-    setRefreshing(!!initialActiveJob);
-    setProgress(
-      initialActiveJob
-        ? {
-            count: initialActiveJob.step_count,
-            label: initialActiveJob.step_label,
-          }
-        : null,
-    );
-    setMessage(null);
-    setError(null);
-    // We intentionally re-run on selectedAccountId AND on the server-
-    // provided initialActiveJob — that pair fully describes "which
-    // account, with which active job (if any)" the page is for now.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAccountId, initialActiveJob?.id]);
-
-  // Poll the job row while a generation is active. This is the safety
-  // net for the SSE stream — if the user navigates away and back, the
-  // stream is dead but the job keeps updating, so polling catches us
-  // up. Stops as soon as the job hits a final state.
-  useEffect(() => {
-    if (!activeJobId) return;
+    const ids = Array.from(refreshing.values())
+      .map((s) => s.activeJobId)
+      .filter((id): id is string => !!id);
+    if (ids.length === 0) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     async function poll() {
-      if (cancelled || !activeJobId) return;
-      try {
-        const res = await fetch(`/api/video-ideas/jobs/${activeJobId}`);
-        if (cancelled) return;
-        if (!res.ok) {
-          // 404 / 500 etc — give up polling and reset UI state.
-          setRefreshing(false);
-          setActiveJobId(null);
-          setProgress(null);
-          return;
-        }
-        const json = (await res.json()) as {
-          job?: {
-            status: "running" | "done" | "failed";
-            step_count: number;
-            step_label: string | null;
-            generated_count: number | null;
-            error: string | null;
+      if (cancelled) return;
+      let anyStillRunning = false;
+      for (const id of ids) {
+        try {
+          const res = await fetch(`/api/video-ideas/jobs/${id}`);
+          if (!res.ok) continue;
+          const json = (await res.json()) as {
+            job?: {
+              integration_id: string;
+              status: "running" | "done" | "failed";
+              step_count: number;
+              step_label: string | null;
+              generated_count: number | null;
+              error: string | null;
+            };
           };
-        };
-        const job = json.job;
-        if (!job) {
-          setRefreshing(false);
-          setActiveJobId(null);
-          setProgress(null);
-          return;
+          const job = json.job;
+          if (!job) continue;
+          const acctId = job.integration_id;
+          if (job.status === "running") {
+            anyStillRunning = true;
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              next.set(acctId, {
+                label: job.step_label ?? "Working…",
+                count: job.step_count,
+                activeJobId: id,
+              });
+              return next;
+            });
+          } else if (job.status === "done") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              next.delete(acctId);
+              return next;
+            });
+          } else {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              next.delete(acctId);
+              return next;
+            });
+            setError(job.error ?? "Generation failed.");
+          }
+        } catch {
+          // network blip — try again next tick
+          anyStillRunning = true;
         }
-        setProgress({
-          count: job.step_count,
-          label: job.step_label ?? "Working…",
-        });
-        if (job.status === "done") {
-          setRefreshing(false);
-          setActiveJobId(null);
-          setProgress(null);
-          const generated = job.generated_count ?? 0;
-          setMessage(
-            generated > 0
-              ? `Generated ${generated} new idea${generated === 1 ? "" : "s"}.`
-              : "Already at target.",
-          );
-          router.refresh();
-          return;
-        }
-        if (job.status === "failed") {
-          setRefreshing(false);
-          setActiveJobId(null);
-          setProgress(null);
-          setError(job.error ?? "Generation failed.");
-          return;
-        }
+      }
+      if (anyStillRunning) {
         timer = setTimeout(poll, 2500);
-      } catch {
-        if (cancelled) return;
-        timer = setTimeout(poll, 3500);
+      } else {
+        router.refresh();
       }
     }
 
@@ -425,17 +383,10 @@ function VideoIdeasGroup({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [activeJobId, router]);
-  const [detailIdeaId, setDetailIdeaId] = useState<string | null>(null);
-  const detailIdea = useMemo(
-    () => ideas.find((i) => i.id === detailIdeaId) ?? null,
-    [ideas, detailIdeaId],
-  );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount; SSE updates Map directly afterwards
 
-  const [view, setView] = useState<"pending" | "scheduled" | "posted">(
-    "pending",
-  );
-
+  // Stat buckets.
   const pendingIdeas = useMemo(
     () => ideas.filter((i) => i.status === "pending"),
     [ideas],
@@ -444,9 +395,6 @@ function VideoIdeasGroup({
     () =>
       ideas
         .filter((i) => i.status === "scheduled")
-        // Ascending priority = top of queue (= #1 user's working on
-        // first). Ties broken by created_at so newly-promoted items
-        // land predictably.
         .sort((a, b) => {
           if (a.priority !== b.priority) return a.priority - b.priority;
           return (
@@ -477,20 +425,10 @@ function VideoIdeasGroup({
     [pendingIdeas, scheduledIdeas, postedIdeas],
   );
 
-  // Sort options vary by tab. Working on always sorts by manual
-  // priority (the whole point of the tab) so no sort selector is
-  // shown there. Ideas + Posted each get their own option set.
-  type IdeasSort = "newest" | "oldest" | "expiring";
-  type PostedSort = "recent_post" | "oldest_post" | "best" | "worst";
-  const [ideasSort, setIdeasSort] = useState<IdeasSort>("newest");
-  const [postedSort, setPostedSort] = useState<PostedSort>("recent_post");
-
   const filtered = useMemo(() => {
     const base = baseForView(view);
-    const byKind = filter === "all" ? base : base.filter((i) => i.kind === filter);
-    // The base lists are already sorted by their natural default
-    // (pending: newest, scheduled: priority, posted: most recent
-    // post). Only re-sort when the user picked a non-default option.
+    const byKind =
+      filter === "all" ? base : base.filter((i) => i.kind === filter);
     if (view === "scheduled") return byKind;
     if (view === "pending") {
       if (ideasSort === "newest") return byKind;
@@ -510,7 +448,6 @@ function VideoIdeasGroup({
       }
       return sorted;
     }
-    // posted
     if (postedSort === "recent_post") return byKind;
     const sorted = [...byKind];
     if (postedSort === "oldest_post") {
@@ -526,8 +463,6 @@ function VideoIdeasGroup({
           (a.performance_stats?.ratio ?? -1),
       );
     } else if (postedSort === "worst") {
-      // Push unreviewed (ratio null) to the bottom — "worst" only
-      // means anything once a verdict exists.
       sorted.sort((a, b) => {
         const ar = a.performance_stats?.ratio;
         const br = b.performance_stats?.ratio;
@@ -557,18 +492,9 @@ function VideoIdeasGroup({
     return c;
   }, [view, baseForView]);
 
-  const [markDoneIdeaId, setMarkDoneIdeaId] = useState<string | null>(null);
-  const markDoneIdea = useMemo(
-    () => ideas.find((i) => i.id === markDoneIdeaId) ?? null,
-    [ideas, markDoneIdeaId],
-  );
-  const [reviewingId, setReviewingId] = useState<string | null>(null);
-
-  // dnd-kit sensors. Pointer = mouse, Touch = mobile, Keyboard = a11y.
+  // dnd-kit sensors for the Working-on tab.
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 6 },
-    }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 150, tolerance: 8 },
     }),
@@ -577,19 +503,15 @@ function VideoIdeasGroup({
     }),
   );
 
+  // Drag-reorder scopes priority per-account so the queue stays
+  // coherent even when ideas from multiple accounts are shown together.
   async function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const fromIdx = scheduledIdeas.findIndex((i) => i.id === active.id);
     const toIdx = scheduledIdeas.findIndex((i) => i.id === over.id);
     if (fromIdx === -1 || toIdx === -1) return;
-
-    // Optimistic reorder of the local state.
     const reordered = arrayMove(scheduledIdeas, fromIdx, toIdx);
-
-    // Compute the new priority by averaging the neighbours at the
-    // drop position. Large default gap (10000) leaves room for ~14
-    // halving inserts before we'd ever need to rebalance.
     const moved = reordered[toIdx]!;
     const prevPriority = toIdx > 0 ? reordered[toIdx - 1]!.priority : null;
     const nextPriority =
@@ -603,22 +525,19 @@ function VideoIdeasGroup({
       newPriority = prevPriority + 10000;
     } else {
       newPriority = Math.floor((prevPriority + nextPriority) / 2);
-      // If neighbours are adjacent integers (no room), nudge — the
-      // server will eventually rebalance if this becomes common.
       if (newPriority === prevPriority) newPriority = prevPriority + 1;
     }
-
     setIdeas((rows) =>
-      rows.map((r) => (r.id === moved.id ? { ...r, priority: newPriority } : r)),
+      rows.map((r) =>
+        r.id === moved.id ? { ...r, priority: newPriority } : r,
+      ),
     );
-
     const res = await fetch(`/api/video-ideas/${moved.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ priority: newPriority }),
     });
     if (!res.ok) {
-      // Revert on failure.
       setIdeas((rows) =>
         rows.map((r) =>
           r.id === moved.id ? { ...r, priority: moved.priority } : r,
@@ -629,8 +548,6 @@ function VideoIdeasGroup({
   }
 
   async function runReviewNow(id: string, postId?: string) {
-    // Per-post review uses post.id as the busy key so each platform
-    // row's spinner is independent. Whole-idea review uses idea.id.
     setReviewingId(postId ?? id);
     setError(null);
     try {
@@ -651,204 +568,11 @@ function VideoIdeasGroup({
     }
   }
 
-  // Account-switching used to live here when each page-load was scoped
-  // to one account via ?account=. The master list now renders all
-  // groups; no switcher needed.
-  void searchParams;
-
-  async function refresh() {
-    if (!selectedAccountId) {
-      setError("No account selected.");
-      return;
-    }
-    setRefreshing(true);
-    setError(null);
-    setMessage(null);
-    setProgress({ count: 0, label: "Starting…" });
-    // localSseDone tracks whether the SSE stream itself reached a
-    // terminal event. If the user navigates away the stream gets cut
-    // off and we fall through to the polling effect (which kicks in
-    // because activeJobId is still set).
-    let localSseDone = false;
-    // Lock the integration id this refresh is for. If the user
-    // switches accounts mid-stream we'll detect a mismatch and ignore
-    // late events — protects against the previous account's stream
-    // writing into the new account's view.
-    const refreshIntegrationId = selectedAccountId;
-    // Abort any previous in-flight refresh and install a new
-    // controller. Stored in a ref so account-switching can cancel it.
-    refreshAbortRef.current?.abort();
-    const controller = new AbortController();
-    refreshAbortRef.current = controller;
-    try {
-      const res = await fetch("/api/video-ideas/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ integration_id: selectedAccountId }),
-        signal: controller.signal,
-      });
-      if (res.status === 409) {
-        // Another run is already going for this account — adopt its
-        // id and let the polling effect track it.
-        const json = (await res.json().catch(() => ({}))) as {
-          job_id?: string;
-          error?: string;
-        };
-        if (json.job_id) {
-          setActiveJobId(json.job_id);
-          setProgress({ count: 0, label: "Resuming generation…" });
-        } else {
-          setError(json.error ?? "A generation is already running.");
-          setRefreshing(false);
-          setProgress(null);
-        }
-        return;
-      }
-      if (!res.ok || !res.body) {
-        setError(`Refresh failed (${res.status}).`);
-        setRefreshing(false);
-        setProgress(null);
-        return;
-      }
-
-      // Stream parser for SSE: read chunks, split on \n\n, parse
-      // event/data pairs. Each frame either advances the progress
-      // display, finishes the run, or surfaces an error.
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalMessage: string | null = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (controller.signal.aborted) return;
-        buffer += decoder.decode(value, { stream: true });
-
-        let nl: number;
-        while ((nl = buffer.indexOf("\n\n")) !== -1) {
-          const frame = buffer.slice(0, nl);
-          buffer = buffer.slice(nl + 2);
-          // Refuse to write into state if the user has since switched
-          // accounts — this stream is for the old integration.
-          if (refreshIntegrationId !== selectedAccountId) continue;
-          let evtType = "message";
-          let dataStr = "";
-          for (const line of frame.split("\n")) {
-            if (line.startsWith("event:")) evtType = line.slice(6).trim();
-            else if (line.startsWith("data:")) dataStr = line.slice(5).trim();
-          }
-          if (!dataStr) continue;
-          let payload: Record<string, unknown> = {};
-          try {
-            payload = JSON.parse(dataStr);
-          } catch {
-            continue;
-          }
-          if (evtType === "job") {
-            // Server returned the job row id — set it so the polling
-            // effect can fall back to status checks if SSE drops.
-            if (typeof payload.id === "string") {
-              setActiveJobId(payload.id);
-            }
-          } else if (evtType === "prepare") {
-            setProgress({ count: 0, label: String(payload.label ?? "Working…") });
-          } else if (evtType === "step") {
-            setProgress({
-              count: Number(payload.count ?? 0),
-              label: String(payload.label ?? "Working…"),
-            });
-          } else if (evtType === "inserting") {
-            setProgress({
-              count: Number(payload.generated ?? 0),
-              label: "Saving ideas to your library…",
-            });
-          } else if (evtType === "done") {
-            localSseDone = true;
-            const generated = Number(payload.generated ?? 0);
-            if (generated > 0) {
-              finalMessage = `Generated ${generated} new idea${generated === 1 ? "" : "s"}.`;
-            } else {
-              finalMessage =
-                typeof payload.message === "string"
-                  ? payload.message
-                  : "Already at target.";
-            }
-          } else if (evtType === "error") {
-            localSseDone = true;
-            setError(
-              typeof payload.error === "string"
-                ? payload.error
-                : "Refresh failed.",
-            );
-            setRefreshing(false);
-            setActiveJobId(null);
-            setProgress(null);
-            return;
-          }
-        }
-      }
-
-      // If the user switched accounts during the stream, suppress
-      // everything that came from the old integration's run. Polling
-      // for it has already been cancelled by the account-switch
-      // effect.
-      if (refreshIntegrationId !== selectedAccountId) return;
-      if (localSseDone) {
-        if (finalMessage) setMessage(finalMessage);
-        router.refresh();
-        setRefreshing(false);
-        setActiveJobId(null);
-        setProgress(null);
-      }
-      // If the stream ended without a done/error frame (e.g. tab was
-      // backgrounded and reconnected), leave refreshing + activeJobId
-      // set — the polling effect will take over from here.
-    } catch (err) {
-      // AbortError fires when the user switched accounts (we cancelled
-      // the request) — that's expected, not an error to show.
-      const aborted =
-        err instanceof DOMException && err.name === "AbortError";
-      if (aborted) return;
-      // Don't surface state for a stream that's no longer for the
-      // active account.
-      if (refreshIntegrationId !== selectedAccountId) return;
-      // Network drop — keep refreshing flag so the polling effect
-      // (activeJobId-driven) continues to surface progress. If we
-      // never even got a job id, fall back to error.
-      if (!activeJobId) {
-        setError(err instanceof Error ? err.message : String(err));
-        setRefreshing(false);
-        setProgress(null);
-      }
-    }
-  }
-
-  async function updateTarget(newTarget: number) {
-    if (!selectedAccountId) return;
-    setSavingTarget(true);
-    try {
-      const res = await fetch("/api/video-ideas/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          integration_id: selectedAccountId,
-          target_count: newTarget,
-        }),
-      });
-      if (res.ok) setTarget(newTarget);
-    } finally {
-      setSavingTarget(false);
-    }
-  }
-
   async function setStatus(id: string, status: VideoIdeaRow["status"]) {
     const prev = ideas;
     const title = prev.find((r) => r.id === id)?.title ?? "Idea";
     const wasOnIdeas = view === "pending";
-    setIdeas((rows) =>
-      rows.map((r) => (r.id === id ? { ...r, status } : r)),
-    );
+    setIdeas((rows) => rows.map((r) => (r.id === id ? { ...r, status } : r)));
     const res = await fetch(`/api/video-ideas/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -859,13 +583,7 @@ function VideoIdeasGroup({
       toast.error(`Update failed (${res.status}).`);
       return;
     }
-    // Re-fetch server-side so the page query reflects the new status.
-    // The optimistic update above keeps the card animation-snappy in
-    // the meantime; this just guarantees server-truth on the next
-    // render (belt-and-suspenders against any stale-state edge case).
     router.refresh();
-    // Confirm the action when it would change tabs — the user might
-    // miss the silent disappearance. Offer a jump-to action.
     if (status === "scheduled" && wasOnIdeas) {
       toast.success(`Added to plan — ${title.slice(0, 60)}`, {
         action: {
@@ -890,17 +608,13 @@ function VideoIdeasGroup({
     router.refresh();
   }
 
-  // Posted-card delete needs a confirm — it nukes the linked video,
-  // the performance review, and the stats history. Reusable enough to
-  // live alongside `remove` (which is the bare optimistic delete for
-  // pending Dismiss).
   async function deletePosted(id: string) {
     const idea = ideas.find((r) => r.id === id);
     if (!idea) return;
     const ok = await confirm({
       title: `Delete ${idea.title.slice(0, 60)}?`,
       description: idea.performance_review
-        ? "This permanently removes the idea, the linked TikTok video, and the post-mortem review. Future generations lose this signal."
+        ? "This permanently removes the idea, the linked video, and the post-mortem review. Future generations lose this signal."
         : "This permanently removes the idea and any linked posting info.",
       confirmLabel: "Delete",
       tone: "danger",
@@ -908,151 +622,299 @@ function VideoIdeasGroup({
     if (!ok) return;
     await remove(id);
     toast.success("Deleted.");
-    return;
   }
 
+  // Refresh a single account — kicks off the SSE stream, updates the
+  // per-account slot in the refreshing Map as progress arrives. Used
+  // both by "Refresh all" (fired in parallel) and on its own if we
+  // ever want per-account refresh (e.g. retry on failure).
+  async function refreshOne(integrationId: string): Promise<void> {
+    setError(null);
+    setMessage(null);
+    abortControllersRef.current.get(integrationId)?.abort();
+    const controller = new AbortController();
+    abortControllersRef.current.set(integrationId, controller);
+    setRefreshing((prev) => {
+      const next = new Map(prev);
+      next.set(integrationId, {
+        label: "Starting…",
+        count: 0,
+        activeJobId: null,
+      });
+      return next;
+    });
+    try {
+      const res = await fetch("/api/video-ideas/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ integration_id: integrationId }),
+        signal: controller.signal,
+      });
+      if (res.status === 409) {
+        const json = (await res.json().catch(() => ({}))) as {
+          job_id?: string;
+          error?: string;
+        };
+        if (json.job_id) {
+          setRefreshing((prev) => {
+            const next = new Map(prev);
+            next.set(integrationId, {
+              label: "Resuming…",
+              count: 0,
+              activeJobId: json.job_id!,
+            });
+            return next;
+          });
+        } else {
+          setRefreshing((prev) => {
+            const next = new Map(prev);
+            next.delete(integrationId);
+            return next;
+          });
+        }
+        return;
+      }
+      if (!res.ok || !res.body) {
+        setRefreshing((prev) => {
+          const next = new Map(prev);
+          next.delete(integrationId);
+          return next;
+        });
+        setError(`Refresh failed (${res.status}).`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (controller.signal.aborted) return;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 2);
+          let evtType = "message";
+          let dataStr = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) evtType = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataStr = line.slice(5).trim();
+          }
+          if (!dataStr) continue;
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = JSON.parse(dataStr);
+          } catch {
+            continue;
+          }
+          if (evtType === "job") {
+            if (typeof payload.id === "string") {
+              const jid = payload.id;
+              setRefreshing((prev) => {
+                const next = new Map(prev);
+                const cur = next.get(integrationId);
+                next.set(integrationId, {
+                  label: cur?.label ?? "Working…",
+                  count: cur?.count ?? 0,
+                  activeJobId: jid,
+                });
+                return next;
+              });
+            }
+          } else if (evtType === "prepare") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(integrationId);
+              next.set(integrationId, {
+                label: String(payload.label ?? "Working…"),
+                count: cur?.count ?? 0,
+                activeJobId: cur?.activeJobId ?? null,
+              });
+              return next;
+            });
+          } else if (evtType === "step") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(integrationId);
+              next.set(integrationId, {
+                label: String(payload.label ?? "Working…"),
+                count: Number(payload.count ?? cur?.count ?? 0),
+                activeJobId: cur?.activeJobId ?? null,
+              });
+              return next;
+            });
+          } else if (evtType === "inserting") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(integrationId);
+              next.set(integrationId, {
+                label: "Saving…",
+                count: Number(payload.generated ?? cur?.count ?? 0),
+                activeJobId: cur?.activeJobId ?? null,
+              });
+              return next;
+            });
+          } else if (evtType === "done") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              next.delete(integrationId);
+              return next;
+            });
+            return;
+          } else if (evtType === "error") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              next.delete(integrationId);
+              return next;
+            });
+            setError(
+              typeof payload.error === "string"
+                ? payload.error
+                : "Refresh failed.",
+            );
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      if (aborted) return;
+      setRefreshing((prev) => {
+        const next = new Map(prev);
+        next.delete(integrationId);
+        return next;
+      });
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
-  // Empty-account state is handled in the outer VideoIdeasList wrapper.
+  // Fire one refreshOne per connected account in parallel and refresh
+  // the page when they all settle.
+  async function refreshAll() {
+    if (groups.length === 0) return;
+    await Promise.all(groups.map((g) => refreshOne(g.account.id)));
+    router.refresh();
+    setMessage("Generation complete.");
+  }
 
-  // Stats for the strip at the top — only meaningful when on the
-  // posted view (or compact pending counts otherwise).
-  const lastHit = useMemo(
-    () =>
-      postedIdeas.find(
-        (i) =>
-          i.performance_verdict === "hit" &&
-          i.performance_stats?.ratio != null,
-      ),
-    [postedIdeas],
-  );
-  const reviewsPending = useMemo(
-    () =>
-      postedIdeas.filter(
-        (i) => i.posted_video_id && !i.performance_verdict,
-      ).length,
-    [postedIdeas],
-  );
+  const totalActive = refreshing.size;
+  const isRefreshing = totalActive > 0;
+
+  if (groups.length === 0) {
+    return (
+      <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
+        <div className="rounded-lg border border-dashed border-neutral-300 px-6 py-14 text-center dark:border-neutral-700">
+          <h2 className="text-base font-medium text-neutral-900 dark:text-neutral-100">
+            No accounts connected
+          </h2>
+          <p className="mt-2 text-sm text-neutral-500">
+            Connect a TikTok, YouTube, or Instagram account to start
+            generating ideas tailored to it.
+          </p>
+          <Link
+            href="/integrations"
+            className="mt-4 inline-block rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+          >
+            Connect an account
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <section className="space-y-3">
-      <header className="flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 md:py-10">
+      <header className="flex flex-wrap items-center justify-between gap-3 pl-10 md:pl-0">
         <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+            Video ideas
+          </h1>
           <span
-            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-              account.provider === "tiktok"
-                ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
-                : account.provider === "youtube"
-                  ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
-                  : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200"
-            }`}
+            className="text-xs text-neutral-500"
+            title={groups.map((g) => accountTitle(g.account)).join(", ")}
           >
-            {PROVIDER_LABELS[account.provider] ?? account.provider}
+            · {groups.length} account{groups.length === 1 ? "" : "s"}
           </span>
-          <h2 className="truncate text-base font-semibold text-neutral-900 dark:text-neutral-100">
-            {accountTitle(account)}
-          </h2>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-neutral-500">
-            <span className="hidden sm:inline">Target</span>
-            <select
-              value={target}
-              onChange={(e) => updateTarget(Number(e.target.value))}
-              disabled={savingTarget || !selectedAccountId}
-              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900"
-            >
-              {[5, 10, 15, 20, 30].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={refreshing || !selectedAccountId}
-            className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+          <Link
+            href="/integrations"
+            className="text-xs text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
           >
-            {refreshing && (
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white dark:border-black/40 dark:border-t-black" />
-            )}
-            {refreshing ? "Generating" : "↻ Refresh"}
-          </button>
+            +
+          </Link>
         </div>
+        <button
+          type="button"
+          onClick={refreshAll}
+          disabled={isRefreshing}
+          className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+        >
+          {isRefreshing
+            ? `Refreshing ${totalActive}/${groups.length}…`
+            : `Refresh all`}
+        </button>
       </header>
 
-      {/* Stat strip — quick glanceable state */}
-      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-500">
-        <span>
-          <strong className="text-neutral-900 dark:text-neutral-100">
-            {pendingIdeas.length}
-          </strong>{" "}
-          ready
-        </span>
-        <span>
-          <strong className="text-neutral-900 dark:text-neutral-100">
-            {postedIdeas.length}
-          </strong>{" "}
-          posted
-        </span>
-        {reviewsPending > 0 && (
-          <span>
-            <strong className="text-amber-700 dark:text-amber-300">
-              {reviewsPending}
-            </strong>{" "}
-            awaiting review
-          </span>
-        )}
-        {lastHit && (
-          <span className="truncate">
-            <span className="text-emerald-700 dark:text-emerald-300">★</span>{" "}
-            last hit:{" "}
-            <span className="text-neutral-900 dark:text-neutral-100">
-              {lastHit.title.length > 40
-                ? lastHit.title.slice(0, 40) + "…"
-                : lastHit.title}
-            </span>{" "}
-            ({(lastHit.performance_stats?.ratio ?? 0).toFixed(1)}×)
-          </span>
-        )}
-      </div>
-
-      {refreshing && progress && (
-        <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm dark:border-blue-900 dark:bg-blue-950/30">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-blue-500" />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                {progress.count > 0 && (
-                  <span className="font-mono text-[11px] text-blue-700 dark:text-blue-300">
-                    step {progress.count}
+      {isRefreshing && (
+        <div className="mt-3 space-y-1 rounded-md border border-neutral-200 bg-neutral-50/60 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900/40">
+          {Array.from(refreshing.entries()).map(([acctId, state]) => {
+            const acct = accountById.get(acctId);
+            return (
+              <div
+                key={acctId}
+                className="flex items-center justify-between gap-2"
+              >
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                      acct?.provider === "tiktok"
+                        ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
+                        : acct?.provider === "youtube"
+                          ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                          : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200"
+                    }`}
+                  >
+                    {acct ? PROVIDER_LABELS[acct.provider] ?? acct.provider : "?"}
                   </span>
-                )}
-                <span className="text-blue-900 dark:text-blue-100">
-                  {progress.label}
+                  <span className="text-neutral-700 dark:text-neutral-300">
+                    {acct ? accountTitle(acct) : acctId}
+                  </span>
+                </span>
+                <span className="text-neutral-500">
+                  step {state.count} · {state.label}
                 </span>
               </div>
-              <p className="mt-0.5 text-[11px] text-blue-700/70 dark:text-blue-300/70">
-                30-60 seconds — runs server-side, safe to close the tab.
-              </p>
-            </div>
-          </div>
+            );
+          })}
         </div>
       )}
 
       {error && (
-        <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-          {error}
+        <div className="mt-3 flex items-start justify-between gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="opacity-60 hover:opacity-100"
+          >
+            ✕
+          </button>
         </div>
       )}
       {message && !error && (
-        <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">
-          {message}
+        <div className="mt-3 flex items-start justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+          <span>{message}</span>
+          <button
+            type="button"
+            onClick={() => setMessage(null)}
+            className="opacity-60 hover:opacity-100"
+          >
+            ✕
+          </button>
         </div>
       )}
 
-      <div className="mt-6 flex items-center gap-1 rounded-md border border-neutral-200 bg-neutral-100/60 p-1 text-xs dark:border-neutral-800 dark:bg-neutral-900/60">
+      <div className="mt-4 flex items-center gap-1 rounded-md border border-neutral-200 bg-neutral-100/60 p-1 text-xs dark:border-neutral-800 dark:bg-neutral-900/60">
         {(["pending", "scheduled", "posted"] as const).map((v) => {
           const active = view === v;
           const count =
@@ -1137,35 +999,23 @@ function VideoIdeasGroup({
         )}
       </div>
 
-      {view === "pending" && (
-        <div className="mt-4 space-y-3">
-          <AccountPreferences
-            selectedAccountId={selectedAccountId}
-            initial={preferences ?? null}
-          />
-          <QuickAddIdea selectedAccountId={selectedAccountId} />
-        </div>
-      )}
-
-      <section className="mt-6 space-y-3">
-        {filtered.length === 0 && (
-          <div className="rounded-lg border border-dashed border-neutral-300 px-4 py-10 text-center text-sm text-neutral-500 dark:border-neutral-700">
+      <section className="mt-4 divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-950">
+        {filtered.length === 0 ? (
+          <div className="rounded-lg px-4 py-10 text-center text-sm text-neutral-500">
             {view === "pending" &&
               (pendingIdeas.length === 0
-                ? "No ideas yet for this account. Hit Refresh to generate the first batch."
+                ? "No ideas yet. Hit Refresh all to generate the first batch."
                 : "No ideas match this filter.")}
             {view === "scheduled" &&
               (scheduledIdeas.length === 0
-                ? "Nothing in your queue. Pick an idea from the Ideas tab and hit “Add to plan” to commit to it."
+                ? "Nothing in your queue. Pick an idea and Add to plan."
                 : "No queued ideas match this filter.")}
             {view === "posted" &&
               (postedIdeas.length === 0
-                ? "Nothing posted yet. From your queue, mark an idea as posted to see how it performs."
+                ? "Nothing posted yet."
                 : "No posted videos match this filter.")}
           </div>
-        )}
-
-        {view === "scheduled" ? (
+        ) : view === "scheduled" ? (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -1176,13 +1026,14 @@ function VideoIdeasGroup({
               strategy={verticalListSortingStrategy}
             >
               {filtered.map((i, idx) => (
-                <SortableIdeaCard
-                  key={i.id}
-                  id={i.id}
-                  position={idx + 1}
-                >
+                <SortableIdeaCard key={i.id} id={i.id} position={idx + 1}>
                   <CompactIdeaCard
                     i={i}
+                    account={
+                      i.integration_id
+                        ? accountById.get(i.integration_id) ?? null
+                        : null
+                    }
                     onOpen={() => setDetailIdeaId(i.id)}
                   />
                 </SortableIdeaCard>
@@ -1191,15 +1042,16 @@ function VideoIdeasGroup({
           </DndContext>
         ) : (
           filtered.map((i) => (
-            <article
+            <CompactIdeaCard
               key={i.id}
-              className="group rounded-lg border border-neutral-200 bg-white transition hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-950 dark:hover:border-neutral-700"
-            >
-              <CompactIdeaCard
-                i={i}
-                onOpen={() => setDetailIdeaId(i.id)}
-              />
-            </article>
+              i={i}
+              account={
+                i.integration_id
+                  ? accountById.get(i.integration_id) ?? null
+                  : null
+              }
+              onOpen={() => setDetailIdeaId(i.id)}
+            />
           ))
         )}
       </section>
@@ -1224,6 +1076,12 @@ function VideoIdeasGroup({
       {detailIdea && (
         <IdeaDetailModal
           idea={detailIdea}
+          account={
+            detailIdea.integration_id
+              ? accountById.get(detailIdea.integration_id) ?? null
+              : null
+          }
+          reviewingId={reviewingId}
           onClose={() => setDetailIdeaId(null)}
           onSchedule={() => {
             setStatus(detailIdea.id, "scheduled");
@@ -1245,18 +1103,20 @@ function VideoIdeasGroup({
             void deletePosted(detailIdea.id);
             setDetailIdeaId(null);
           }}
-          onReview={() => {
-            void runReviewNow(detailIdea.id);
+          onReview={(postId) => {
+            void runReviewNow(detailIdea.id, postId);
           }}
         />
       )}
       {confirmDialog}
-    </section>
+    </div>
   );
 }
 
 function IdeaDetailModal({
   idea,
+  account,
+  reviewingId,
   onClose,
   onSchedule,
   onDone,
@@ -1266,25 +1126,38 @@ function IdeaDetailModal({
   onReview,
 }: {
   idea: VideoIdeaRow;
+  account: IdeasAccount | null;
+  reviewingId: string | null;
   onClose: () => void;
   onSchedule: () => void;
   onDone: () => void;
   onUnschedule?: () => void;
   onDismiss?: () => void;
   onDeletePosted?: () => void;
-  onReview?: () => void;
+  onReview?: (postId?: string) => void;
 }) {
   const captionTabs = useMemo(() => buildCaptionTabs(idea), [idea]);
+  const platform = (idea.provider ?? account?.provider ?? "").toLowerCase();
+  const platformLabel =
+    PLATFORM_LABELS[platform] ?? PROVIDER_LABELS[platform] ?? platform;
+  const accountLabel = account ? accountTitle(account) : "Unknown account";
 
   return (
     <Modal
       open={true}
       onClose={onClose}
       title={idea.title}
-      subtitle={`${KIND_LABELS[idea.kind]} · ${expiresLabel(idea.expires_at)}`}
+      subtitle={`${platformLabel} · ${accountLabel} · ${KIND_LABELS[idea.kind]} · ${expiresLabel(idea.expires_at)}`}
       maxWidth="max-w-3xl"
     >
       <div className="space-y-5">
+        {idea.status === "done" && (
+          <PerformanceBlock
+            i={idea}
+            reviewingId={reviewingId}
+            onReview={(postId) => onReview?.(postId)}
+          />
+        )}
         {idea.rationale && (
           <p className="rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
             <span className="font-medium text-neutral-700 dark:text-neutral-300">
@@ -1414,7 +1287,7 @@ function IdeaDetailModal({
             {idea.status === "done" && onReview && (
               <button
                 type="button"
-                onClick={onReview}
+                onClick={() => onReview()}
                 className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
               >
                 Review now
@@ -1955,9 +1828,11 @@ function Stat({ label, value }: { label: string; value: string }) {
 // a master feed without having to expand every card.
 function CompactIdeaCard({
   i,
+  account,
   onOpen,
 }: {
   i: VideoIdeaRow;
+  account: IdeasAccount | null;
   onOpen: () => void;
 }) {
   const verdict = i.performance_verdict;
@@ -1969,13 +1844,32 @@ function CompactIdeaCard({
     !!i.platforms?.tiktok ||
     !!i.platforms?.youtube ||
     !!i.platforms?.instagram;
+  // Platform chip + tooltip reveal the source account on hover. Keeps
+  // the row visually quiet (a single chip, not a whole account label)
+  // while still letting the user disambiguate when they have multiple
+  // accounts on the same platform.
+  const platform = (i.provider ?? account?.provider ?? "").toLowerCase();
+  const platformLabel = PLATFORM_LABELS[platform] ?? PROVIDER_LABELS[platform] ?? platform;
+  const platformClass =
+    platform === "tiktok"
+      ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
+      : platform === "youtube"
+        ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
+        : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200";
+  const accountLabel = account ? accountTitle(account) : "Unknown account";
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="block w-full rounded-lg px-4 py-3 text-left transition hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
+      className="block w-full px-4 py-3 text-left transition hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
     >
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${platformClass}`}
+          title={accountLabel}
+        >
+          {platformLabel}
+        </span>
         <span
           className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${KIND_COLORS[i.kind]}`}
         >
