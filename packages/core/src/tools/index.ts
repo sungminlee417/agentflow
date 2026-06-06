@@ -7,6 +7,7 @@ import { buildYouTubeTools } from "./youtube";
 import { buildTikTokTools } from "./tiktok";
 import { buildInstagramTools } from "./instagram";
 import { buildApifyTikTokTools, loadApifyKey } from "./apify-tiktok";
+import { buildApifyInstagramTools } from "./apify-instagram";
 import { buildUploadsTools } from "./uploads";
 import { buildTranscriptionTools, loadOpenAIKey } from "./transcription";
 import { buildVideoIdeasTools } from "./video-ideas";
@@ -119,6 +120,7 @@ export async function buildToolsForIntegrations(
   const apifyToken = await loadApifyKey(supabase, userId, decrypt);
   if (apifyToken) {
     Object.assign(tools, buildApifyTikTokTools(apifyToken));
+    Object.assign(tools, buildApifyInstagramTools(apifyToken));
     connected.push("apify");
   }
 

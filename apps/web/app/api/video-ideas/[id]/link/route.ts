@@ -1,6 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { extractPostedVideoId } from "@agentflow/core";
+import {
+  decrypt,
+  extractPostedVideoId,
+  fetchImportedVideoMetadata,
+  getFreshAccessToken,
+} from "@agentflow/core";
 
 // Link an idea to one OR more posted videos (per-platform) and mark
 // the idea as 'done'. Each post gets its own video_idea_posts row
@@ -135,18 +140,20 @@ export async function PATCH(
   const integrationIds = Array.from(new Set(pending.map((p) => p.integration_id)));
   const { data: integrations } = await supabase
     .from("integrations")
-    .select("id, provider")
+    .select(
+      "id, provider, encrypted_access_token, encrypted_refresh_token, expires_at",
+    )
     .eq("user_id", user.id)
     .in("id", integrationIds);
   const integrationByPid = new Map(
-    (integrations ?? []).map((i) => [
-      i.id as string,
-      i.provider as string,
-    ]),
+    (integrations ?? []).map((i) => [i.id as string, i]),
   );
 
-  const postedAt = new Date();
-  const nextReview = new Date(postedAt.getTime() + 48 * 60 * 60 * 1000);
+  // Bring posted_at + next_review_at off the wall clock and onto the
+  // platform's actual publish time. The review math (hours_since_posted,
+  // verdict thresholds, +48h / +7d scheduling) all keys off this; using
+  // mark-done time skews every review against the wrong reference.
+  const nowMs = Date.now();
   const inserts: Array<{
     idea_id: string;
     user_id: string;
@@ -159,16 +166,56 @@ export async function PATCH(
   }> = [];
   const errors: string[] = [];
   for (const p of pending) {
-    const platform = integrationByPid.get(p.integration_id);
-    if (!platform) {
+    const integration = integrationByPid.get(p.integration_id);
+    if (!integration) {
       errors.push(`Unknown integration ${p.integration_id}.`);
       continue;
     }
+    const platform = integration.provider as string;
     const videoId = extractPostedVideoId(platform, p.url);
     if (!videoId) {
       errors.push(`Could not parse a ${platform} video id from: ${p.url}`);
       continue;
     }
+
+    // Pull the platform's own posted_at. Best-effort — token errors
+    // or videos the API can't see (privacy, just-uploaded propagation
+    // lag) fall back to NOW so the user can still mark the idea done.
+    let actualPostedAt: Date | null = null;
+    try {
+      const accessToken = integration.encrypted_access_token as string | null;
+      if (accessToken) {
+        const token = await getFreshAccessToken(
+          supabase,
+          user.id,
+          platform as "tiktok" | "youtube" | "instagram",
+          {
+            id: integration.id as string,
+            encrypted_access_token: accessToken,
+            encrypted_refresh_token:
+              (integration.encrypted_refresh_token as string | null) ?? null,
+            expires_at: (integration.expires_at as string | null) ?? null,
+          },
+        ).catch(() => decrypt(accessToken));
+        const meta = await fetchImportedVideoMetadata(platform, token, p.url);
+        if (meta?.postedAt) actualPostedAt = new Date(meta.postedAt);
+      }
+    } catch (err) {
+      console.warn(
+        `[video-ideas/link] couldn't resolve real posted_at for ${platform} ${videoId}:`,
+        err,
+      );
+    }
+
+    const postedAt = actualPostedAt ?? new Date(nowMs);
+    // If the video is >48h old already, schedule the next review for
+    // 1 minute from now so the worker picks it up immediately rather
+    // than queuing a review for a moment in the past.
+    const fortyEightHoursOut = postedAt.getTime() + 48 * 60 * 60 * 1000;
+    const nextReview = new Date(
+      Math.max(fortyEightHoursOut, nowMs + 60 * 1000),
+    );
+
     inserts.push({
       idea_id: id,
       user_id: user.id,
@@ -225,6 +272,6 @@ export async function PATCH(
     ok: true,
     linked: inserts.length,
     errors: errors.length > 0 ? errors : undefined,
-    next_review_at: nextReview.toISOString(),
+    next_review_at: primary.next_review_at,
   });
 }

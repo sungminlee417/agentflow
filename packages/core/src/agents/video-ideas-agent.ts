@@ -167,15 +167,21 @@ function describeYouTubeAvailable(): string {
   ].join("\n");
 }
 
-function describeInstagramAvailable(): string {
-  return [
+function describeInstagramAvailable(connected: string[]): string {
+  const lines = [
     "- Instagram (your account): instagram_get_my_account, instagram_list_my_media",
     "- Per-media insights (reach, saved, shares): instagram_get_media_insights",
     "- Account-level insights over time: instagram_get_account_insights",
     "- Audience sentiment: instagram_list_comments",
-    SIMILAR_REVIEWS_TOOL_LINE,
-    "- Uploaded analytics CSVs: list_my_analytics_uploads, get_analytics_upload",
-  ].join("\n");
+  ];
+  if (connected.includes("apify")) {
+    lines.push(
+      "- Niche/competitor (Apify): instagram_search_hashtag, instagram_get_profile",
+    );
+  }
+  lines.push(SIMILAR_REVIEWS_TOOL_LINE);
+  lines.push("- Uploaded analytics CSVs: list_my_analytics_uploads, get_analytics_upload");
+  return lines.join("\n");
 }
 
 type RecentReview = {
@@ -430,16 +436,18 @@ Your LAST message is this JSON only — no prose, no code fence.`;
 function instagramPrompt(
   count: number,
   today: string,
+  connected: string[],
   recentReviews: RecentReview[] = [],
   preferences: string | null = null,
 ): string {
+  const hasApify = connected.includes("apify");
   const hasReviews = recentReviews.length > 0;
   return `You are an Instagram Reels content strategist. Produce exactly ${count} fresh Reels ideas as a JSON object.
 
 OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
-${describeInstagramAvailable()}
+${describeInstagramAvailable(connected)}
 ${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
 
 PROCEDURE
@@ -448,13 +456,18 @@ PROCEDURE
 3. For top 3-5 recent Reels, instagram_get_media_insights. Reach + saves + shares matter MORE than likes; high saves = save-worthy concept.
 4. instagram_get_account_insights (days 30) — reach + profile-view trends.
 5. For the highest-engagement recent Reel, instagram_list_comments for audience questions.
-6. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.
+${hasApify ? `6. Extract the creator's most-recurring 2-3 hashtags from step 2. For each, instagram_search_hashtag (limit 25):
+   (a) what's trending in the niche right now;
+   (b) 3-5 distinct non-user authors → competitors;
+   (c) SATURATION: many recent posts with engagement clearly below niche median → flag in saturation_warning.
+7. For 1-2 of those competitor handles, instagram_get_profile (posts_limit 10).
+8. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.` : `6. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.`}
 
 KINDS
 - pattern: source_refs={source_media_id, permalink}. Extrapolate from a top Reel.
-- competitor: SKIP unless a post-mortem above cites one (IG API has no niche search).
-- trend: only if user's own insights show a format clearly gaining (e.g. carousels up vs Reels). Cite the evidence.
-- rising: SKIP unless user's engagement clearly accelerating on a specific format. Max 0-1 per refresh.
+- ${hasApify ? `competitor: source_refs={competitor_username, competitor_post_url}. Something they nailed and the user hasn't.` : `competitor: SKIP unless a post-mortem above cites one (no Apify connected).`}
+- ${hasApify ? `trend: source_refs={hashtag, sample_url}. Currently visible in the niche, not yet saturated.` : `trend: only if user's own insights show a format clearly gaining (e.g. carousels up vs Reels). Cite the evidence.`}
+- ${hasApify ? `rising: velocity ACCELERATING last 3-7d. source_refs must include velocity_note. Max 1-2 per refresh.` : `rising: SKIP unless user's engagement clearly accelerating on a specific format. Max 0-1 per refresh.`}
 - seasonal: hard_date (ISO 8601), next 60 days only.
 
 RULES
@@ -697,7 +710,7 @@ export async function runVideoIdeasAgent({
   if (integration.provider === "youtube") {
     system = youtubePrompt(count, today, recentReviews, preferences);
   } else if (integration.provider === "instagram") {
-    system = instagramPrompt(count, today, recentReviews, preferences);
+    system = instagramPrompt(count, today, connected, recentReviews, preferences);
   } else {
     system = tiktokPrompt(
       count,

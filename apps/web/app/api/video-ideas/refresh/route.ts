@@ -45,6 +45,8 @@ const TOOL_LABELS: Record<string, string> = {
   instagram_get_media_insights: "Pulling Instagram insights for a post",
   instagram_get_account_insights: "Pulling Instagram account insights",
   instagram_list_comments: "Reading Instagram comments",
+  instagram_search_hashtag: "Searching Instagram hashtag",
+  instagram_get_profile: "Inspecting an Instagram competitor",
 };
 
 function humanizeStep(raw: string): string {

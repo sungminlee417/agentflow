@@ -11,6 +11,7 @@ export * from "./tools/youtube";
 export * from "./tools/tiktok";
 export * from "./tools/instagram";
 export * from "./tools/apify-tiktok";
+export * from "./tools/apify-instagram";
 export * from "./tools/transcription";
 export * from "./tools/uploads";
 export * from "./tools/video-ideas";
