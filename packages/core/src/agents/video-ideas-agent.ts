@@ -175,6 +175,7 @@ type RecentReview = {
   title: string;
   kind: string;
   format: string | null;
+  platform: string | null;
   verdict: string | null;
   ratio: number | null;
   takeaways: string | null;
@@ -188,8 +189,11 @@ function reviewsBlock(reviews: RecentReview[]): string {
   ];
   for (const r of reviews) {
     const ratioStr = r.ratio != null ? `${r.ratio.toFixed(2)}× median` : "unrated";
+    const tags = [r.platform, r.kind, r.format ?? "?"]
+      .filter((t): t is string => !!t)
+      .join(", ");
     lines.push(
-      `- "${r.title}" (${r.kind}, ${r.format ?? "?"}): ${r.verdict ?? "?"} · ${ratioStr}`,
+      `- "${r.title}" (${tags}): ${r.verdict ?? "?"} · ${ratioStr}`,
     );
     if (r.takeaways) {
       lines.push(`  Learnings: ${r.takeaways}`);
@@ -581,29 +585,49 @@ export async function runVideoIdeasAgent({
     tools[name] = value;
   }
 
-  // Pull recent post-mortems for this account — they ground future
-  // ideas in actual outcomes (what hit, what missed).
+  // Pull recent post-mortems for this account. Queries through
+  // video_idea_posts (rather than video_ideas) so EVERY settled
+  // review feeds the learning loop — imported videos, single-platform
+  // posts, and multi-platform posts alike. Joins via the idea_id FK
+  // to pick up title/kind/format from the parent idea row.
+  //
+  // Skips too_early verdicts (the +48h pass before stats stabilise)
+  // since their signal is noisy. One row per (post × verdict) — a
+  // multi-platform shoot contributes one entry per platform so the
+  // agent sees divergence ("TikTok hit, IG flop").
   const recentReviews: RecentReview[] = [];
   try {
     const { data: reviewed } = await supabase
-      .from("video_ideas")
+      .from("video_idea_posts")
       .select(
-        "title, kind, format, performance_verdict, performance_stats, performance_review",
+        "platform, performance_verdict, performance_stats, performance_review, last_reviewed_at, video_ideas!inner(title, kind, format)",
       )
       .eq("user_id", userId)
       .eq("integration_id", integrationId)
       .not("performance_verdict", "is", null)
+      .neq("performance_verdict", "too_early")
       .order("last_reviewed_at", { ascending: false })
       .limit(8);
-    for (const row of (reviewed ?? []) as Array<{
-      title: string;
-      kind: string;
-      format: string | null;
+    type ReviewedRow = {
+      platform: string | null;
       performance_verdict: string | null;
       performance_stats: { ratio?: number } | null;
       performance_review: string | null;
-    }>) {
-      // Extract the bullets under "Takeaways for the next video" — that's
+      // Supabase's typed select returns nested relations as either an
+      // object (FK) or array (1:M). idea_id is a regular FK so this
+      // is single-object — but the generated types still type it as
+      // an array in some configs. Accept either shape.
+      video_ideas:
+        | { title?: string; kind?: string; format?: string | null }
+        | Array<{ title?: string; kind?: string; format?: string | null }>
+        | null;
+    };
+    for (const row of (reviewed ?? []) as unknown as ReviewedRow[]) {
+      const idea = Array.isArray(row.video_ideas)
+        ? row.video_ideas[0]
+        : row.video_ideas;
+      if (!idea?.title || !idea.kind) continue;
+      // Extract the "Takeaways for the next video" bullets — that's
       // the actionable part for future generation.
       let takeaways: string | null = null;
       if (row.performance_review) {
@@ -617,9 +641,10 @@ export async function runVideoIdeasAgent({
         }
       }
       recentReviews.push({
-        title: row.title,
-        kind: row.kind,
-        format: row.format,
+        title: idea.title,
+        kind: idea.kind,
+        format: idea.format ?? null,
+        platform: row.platform ?? null,
         verdict: row.performance_verdict,
         ratio: row.performance_stats?.ratio ?? null,
         takeaways,
