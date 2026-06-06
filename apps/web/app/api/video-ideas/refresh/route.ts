@@ -320,6 +320,7 @@ export async function POST(request: NextRequest) {
           engagement_hook: idea.engagement_hook ?? null,
           trending_sound: idea.trending_sound ?? null,
           saturation_warning: idea.saturation_warning ?? null,
+          video_format: idea.video_format ?? null,
           platforms: idea.platforms ? normalizePlatforms(idea.platforms) : null,
         }));
 

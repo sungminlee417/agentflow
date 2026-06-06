@@ -61,6 +61,9 @@ export type GeneratedIdea = {
   engagement_hook?: string;
   /** Trending TikTok sound to use, if one fits. */
   trending_sound?: string;
+  /** Short-form (<60s) vs long-form (typically 3-15min). Only
+   *  meaningful for YouTube — TT/IG are short-form-only platforms. */
+  video_format?: "short" | "long";
   /** Per-platform caption packaging — only the platforms the creator
    *  has connected get a variant. Shoot is shared (the script/hook/
    *  visual_notes above); this is the metadata that goes around it. */
@@ -100,6 +103,7 @@ const IDEA_SCHEMA = z.object({
   thumbnail_concept: z.string().nullish(),
   engagement_hook: z.string().nullish(),
   trending_sound: z.string().nullish(),
+  video_format: z.enum(["short", "long"]).nullish(),
   platforms: z
     .object({
       tiktok: z
@@ -334,13 +338,16 @@ Your LAST message is this JSON only — no prose, no code fence.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// YouTube Shorts prompt — shoot-ready ideas tailored to YT's algo and
-// audience. Key differences vs TikTok:
-//   - Title is search-keyword-optimised (front-load the keyword phrase)
-//   - Description doubles as the search-index payload (3-5 paragraphs)
-//   - 3 hashtags max (YT only surfaces the first 3 above the video)
-//   - Shorts ≤60s; the Hook still must land in the first 1-2s
-//   - Algo rewards retention + click-through-rate, not raw hashtag virality
+// YouTube prompt — generates both Shorts AND long-form. The agent
+// reads the creator's actual upload history to detect whether they're
+// a Shorts channel, long-form channel, or both, and picks per idea.
+// Each format has its own algo, audience expectations, script shape,
+// title style, and length:
+//   • Short: ≤60s, Shorts-feed algo (TikTok-like), retention-driven,
+//     hook in 1-2s, vertical 9:16, search hashtags less important.
+//   • Long: 3-15+ min, Search/Browse/Suggested algos, CTR-driven
+//     (title + thumbnail are everything), chapters/timestamps matter,
+//     watch time + AVD matter way more than raw views.
 // ─────────────────────────────────────────────────────────────────────
 function youtubePrompt(
   count: number,
@@ -349,7 +356,7 @@ function youtubePrompt(
   preferences: string | null = null,
 ): string {
   const hasReviews = recentReviews.length > 0;
-  return `You are a YouTube Shorts content strategist. Produce exactly ${count} fresh Short ideas as a JSON object.
+  return `You are a YouTube content strategist. Produce exactly ${count} fresh video ideas as a JSON object. Each idea is EITHER a Short (≤60s) or a long-form video (typically 3-15min) — you decide per idea based on what fits the topic AND the creator's upload mix.
 
 OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
@@ -359,12 +366,19 @@ ${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
 
 PROCEDURE
 1. youtube_get_my_channel — anchor "my channel". Note subs + upload cadence.
-2. youtube_list_my_videos (limit 25) — title-keyword patterns + which titles got the most views vs channel median.
-3. For the top 2-3 most-viewed recent videos: youtube_get_video_analytics + youtube_get_video_traffic_sources. The traffic-source breakdown (Search vs Browse vs Suggested) shows whether the channel grows on discovery or recommendations.
-4. youtube_search_niche with queries from step-2 title-keywords (order=viewCount, published_after_days=30). Capture: high-view recent Shorts, common title hooks, non-user channels. 2-3 distinct queries.
+2. youtube_list_my_videos (limit 25) — title-keyword patterns + which titles got the most views vs channel median. CRITICAL: tag each recent video as a Short or long-form using its duration (≤60s = Short). Note the rough mix (e.g. "70% Shorts, 30% long-form" or "Shorts-only channel"). This drives the video_format split in your output.
+3. For the top 2-3 most-viewed recent videos (mix of Shorts + long-form if available): youtube_get_video_analytics + youtube_get_video_traffic_sources. The traffic-source breakdown (Search vs Browse vs Suggested vs Shorts feed) tells you which formats grow this channel.
+4. youtube_search_niche with queries from step-2 title-keywords (order=viewCount, published_after_days=30). Capture: high-view recent videos, common title hooks, non-user channels. 2-3 distinct queries.
 5. For the most engaging recent video in step 4, youtube_get_video_comments for audience questions.
 6. list_my_analytics_uploads — any YT Studio CSV.
 7. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.
+
+FORMAT MIX
+Match the creator's actual mix from step 2. Examples:
+- Shorts-only channel → all ${count} ideas are video_format="short".
+- Long-form-only channel → all video_format="long".
+- 60/40 mix → roughly 60% short, 40% long.
+Pick the format per idea based on (a) the channel's mix, and (b) what the topic genuinely fits — a deep tutorial belongs in long-form even on a Shorts-heavy channel.
 
 KINDS
 - pattern: source_refs={source_video_id, title}. Extrapolate from a top video.
@@ -375,13 +389,19 @@ KINDS
 
 RULES
 - Ground EVERY idea in a tool result — no invented stats, channels, or queries.
-- title: search-keyword-optimised + clickable. Front-load the keyword ("Beginner Fingerstyle Riff in 30 Seconds").
-- hook: actual first 1-2s (spoken + on-screen). Shorts retention dies fast.
-- format: short ("comparison demo", "before/after tutorial").
+- title:
+  • Short → search-keyword-optimised + clickable. Front-load the keyword ("Beginner Fingerstyle Riff in 30 Seconds").
+  • Long → CTR-optimised — curiosity gap + clear value prop ("I Tried Every Fingerstyle Technique So You Don't Have To"). Title is half the battle on long-form because the algo weighs CTR heavily.
+- hook:
+  • Short → actual first 1-2s (spoken + on-screen). Retention dies fast.
+  • Long → first 30-45s. State the payoff up front then tease the reveal — viewers decide to commit by the 30s mark.
+- format: short ("comparison demo", "deep-dive tutorial").
 - rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies, the rationale MUST cite it by title + verdict.` : ""}
 - saturation_warning: only when you saw the SPECIFIC format saturating; else null.
 
-SCRIPT (timestamps, all cues explicit, max 60s total)
+SCRIPT — pick the structure that matches video_format:
+
+If video_format="short" (timestamps, max 60s):
     [0:00-0:02] HOOK
       📢 SAY: "<exact words>"
       🎬 ACTION: <on-camera>
@@ -393,24 +413,45 @@ SCRIPT (timestamps, all cues explicit, max 60s total)
     [0:50-1:00] CTA — exact ask + ON-SCREEN TEXT ("SUBSCRIBE" / "COMMENT YOUR PICK")
 HOOK ≤2s, CTA ≤8s, total ≤60s. Match creator's voice from youtube_list_my_videos.
 
+If video_format="long" (timestamps, target 4-10min):
+    [0:00-0:45] INTRO / HOOK
+      📢 SAY: "<promise the payoff up front + tease the reveal>"
+      🎬 ACTION: <on-camera + B-roll teaser>
+      📺 ON-SCREEN TEXT: chapter title
+    [0:45-2:00] CHAPTER 1 — Context / Setup
+      📢 SAY, 🎬 ACTION, 📺 TEXT, ✂️ CUT, 🎵 AUDIO as needed
+    [2:00-4:00] CHAPTER 2 — Main demonstration / argument
+    [4:00-6:00] CHAPTER 3 — Counter-point or deeper dive
+    [6:00-7:30] CHAPTER 4 — Synthesis / payoff fully revealed
+    [7:30-8:00] CTA — explicit subscribe + next-video tease
+    Include chapter_markers as a separate field: "00:00 Intro / 00:45 Context / 02:00 Demo / 04:00 …". YT Studio reads these as auto-chapters.
+HOOK is the first 30-45s — the payoff promise. Total length varies by topic; tutorial deep-dives 8-15min, reviews 6-12min, opinion 4-8min.
+
 CAPTION
-- post_title: ≤100 chars. Front-load keyword. "#Shorts" only if natural.
-- description: 3-5 short paragraphs (the search-index payload — repeat spoken keywords). Ends with CTA. No inline hashtags.
+- post_title:
+  • Short → ≤100 chars. Front-load keyword. "#Shorts" only if natural.
+  • Long → ≤70 chars ideal (60-70 reads cleanly in browse + mobile). Curiosity gap + value prop.
+- description:
+  • Short → 3-5 short paragraphs (search-index payload — repeat spoken keywords). Ends with CTA. No inline hashtags.
+  • Long → 5-8 paragraphs. Opens with a 2-sentence summary (the "search snippet"). Includes chapter markers (one per line: "00:00 Title"). Ends with CTA + related-video link placeholders. No inline hashtags.
 - hashtags: EXACTLY 3 strings, no leading '#'. YT only surfaces the first 3.
-- cta: one explicit ask ("Subscribe for more 30-second riffs every Friday").
-- visual_notes: 4-6 bullets "• " (lighting, framing 9:16, props, B-roll, color grade).
+- cta: one explicit ask. Short → "Subscribe for…". Long → "Comment your X — and watch <next vid> next".
+- visual_notes: 4-6 bullets "• ". Short → lighting / 9:16 framing / props / B-roll. Long → lighting / 16:9 framing / cutaways / B-roll inserts / chapter art / thumbnail strategy.
 
 VIRALITY
-- optimal_post_window: "Tue-Thu 4-6pm local" (derive from analytics; caveat if weak signal).
-- suggested_duration: seconds, ≤60. Comparison/tutorial 30-45s, high-energy hook 12-20s.
-- thumbnail_concept: ONE visual sentence — the cover frame.
-- engagement_hook: SPECIFIC comment/replay driver.
-- trending_sound: null. (YT uses its own audio library; no algorithmic trending sound.)
+- optimal_post_window: "Tue-Thu 4-6pm local" (derive from analytics; caveat if weak signal). Long-form does better with end-of-week + Saturday morning slots if the analytics show it.
+- suggested_duration:
+  • Short → seconds, ≤60 ("30-45s").
+  • Long → minutes:seconds ("8-10 min" or "6:30").
+- thumbnail_concept: ONE visual sentence — the cover frame for Shorts, the clickable thumbnail for long-form (thumbnail is everything on long-form).
+- engagement_hook: SPECIFIC comment/replay driver. Long-form also benefits from a mid-video re-engagement moment.
+- trending_sound: null. (YT doesn't expose trending sound the way TT does.)
 
 Return ONLY a JSON object {ideas:[...]} matching:
 { "ideas":[{
   "title":string, "hook":string, "format":string, "rationale":string,
   "kind":"pattern"|"trend"|"rising"|"competitor"|"seasonal",
+  "video_format":"short"|"long",
   "source_refs":{...}, "hard_date":string, "saturation_warning":string|null,
   "script":string, "post_title":string, "description":string,
   "hashtags":[string,string,string], "cta":string, "visual_notes":string,

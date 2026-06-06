@@ -51,6 +51,9 @@ export type VideoIdeaRow = {
   kind: "pattern" | "trend" | "rising" | "competitor" | "seasonal";
   source_refs: Record<string, unknown> | null;
   saturation_warning: string | null;
+  /** "short" | "long" | null — only YouTube ideas distinguish; TT/IG
+   *  are short-only platforms so this is null for them. */
+  video_format: "short" | "long" | null;
   expires_at: string;
   status: "pending" | "scheduled" | "done" | "dismissed";
   priority: number;
@@ -2372,6 +2375,18 @@ function CompactIdeaCard({
         >
           {platformLabel}
         </span>
+        {i.video_format && (
+          <span
+            className="inline-flex items-center rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+            title={
+              i.video_format === "short"
+                ? "Short-form video (≤60s)"
+                : "Long-form video (typically 3-15min)"
+            }
+          >
+            {i.video_format === "short" ? "Short" : "Long"}
+          </span>
+        )}
         <span
           className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${KIND_COLORS[i.kind]}`}
         >
