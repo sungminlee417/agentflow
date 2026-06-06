@@ -575,6 +575,7 @@ export function VideoIdeasList({
   async function runReviewNow(id: string, postId?: string) {
     setReviewingId(postId ?? id);
     setError(null);
+    const startToast = toast.loading("Pulling fresh stats + writing review…");
     try {
       const url = postId
         ? `/api/video-ideas/${id}/review?post_id=${encodeURIComponent(postId)}`
@@ -582,12 +583,41 @@ export function VideoIdeasList({
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const text = await res.text();
-        setError(`Review failed: ${text.slice(0, 200)}`);
+        const msg = `Review failed: ${text.slice(0, 200)}`;
+        setError(msg);
+        toast.error(msg, { id: startToast });
         return;
       }
+      const json = (await res.json().catch(() => null)) as {
+        verdict?: string;
+        stats?: { ratio?: number };
+        reviews?: Array<{ verdict?: string; ratio?: number }>;
+      } | null;
+      // The /[id]/review route returns either {verdict, stats} for a
+      // single-post or legacy review, or {reviews:[...]} for an
+      // all-posts pass. Surface whichever applies.
+      let summary = "Review refreshed.";
+      if (json?.verdict) {
+        summary = `Review refreshed — ${json.verdict}${
+          json.stats?.ratio != null && json.verdict !== "too_early"
+            ? ` (${json.stats.ratio.toFixed(2)}×)`
+            : ""
+        }.`;
+      } else if (json?.reviews && json.reviews.length > 0) {
+        const ratios = json.reviews
+          .map((r) => r.ratio)
+          .filter((r): r is number => typeof r === "number");
+        const avg = ratios.length
+          ? ratios.reduce((a, b) => a + b, 0) / ratios.length
+          : null;
+        summary = `Review refreshed across ${json.reviews.length} platform${json.reviews.length === 1 ? "" : "s"}${avg != null ? ` — avg ${avg.toFixed(2)}×` : ""}.`;
+      }
+      toast.success(summary, { id: startToast });
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(msg, { id: startToast });
     } finally {
       setReviewingId(null);
     }
@@ -1739,9 +1769,10 @@ function IdeaDetailModal({
               <button
                 type="button"
                 onClick={() => onReview()}
-                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                disabled={reviewingId === idea.id}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
               >
-                Review now
+                {reviewingId === idea.id ? "Reviewing…" : "Review now"}
               </button>
             )}
             {idea.status !== "scheduled" && idea.status !== "done" && (
