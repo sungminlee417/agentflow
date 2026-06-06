@@ -116,26 +116,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Which platforms is this user wired up to cross-post to? The agent
-  // generates one shared shoot + a caption package per platform, so the
-  // packaging only covers platforms the user can actually publish on.
-  // Source provider first so the agent treats it as the primary.
-  const LINKABLE_PROVIDERS = new Set(["tiktok", "youtube", "instagram"]);
-  const { data: linkRows } = await supabase
-    .from("integrations")
-    .select("provider")
-    .eq("user_id", user.id);
-  const platformSet = new Set<string>();
-  for (const r of linkRows ?? []) {
-    const p = r.provider as string;
-    if (LINKABLE_PROVIDERS.has(p)) platformSet.add(p);
-  }
-  const targetPlatforms: string[] = [];
-  if (platformSet.has(integration.provider)) {
-    targetPlatforms.push(integration.provider);
-    platformSet.delete(integration.provider);
-  }
-  for (const p of platformSet) targetPlatforms.push(p);
+  // Each integration generates only for its own platform — the agent
+  // picks a provider-specific prompt (TT / YT / IG) and the resulting
+  // ideas live in that integration's lane. Cross-platform sharing
+  // happens later via the Mark-Done modal, which can attach one shoot
+  // to posts on multiple platforms when the creator actually does
+  // cross-post a winner.
+  const targetPlatforms: string[] = [integration.provider];
 
   // Don't kick off a duplicate if one is already in flight for this
   // account. Saves the user from accidentally running two generations

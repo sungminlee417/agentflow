@@ -157,6 +157,19 @@ export type ActiveGenerationJob = {
   started_at: string;
 };
 
+// One account's bundle of data on the master /video-ideas page. Each
+// account (= each connected TT/YT/IG integration) gets its own section
+// in the unified feed. The agent generates ideas natively for the
+// account's own platform — no cross-pack at generation time — and the
+// section renders a compact card grid for that account's ideas.
+export type AccountGroup = {
+  account: IdeasAccount;
+  ideas: VideoIdeaRow[];
+  targetCount: number;
+  preferences: string | null;
+  activeJob: ActiveGenerationJob | null;
+};
+
 type KindFilter = "all" | VideoIdeaRow["kind"];
 
 const KIND_LABELS: Record<VideoIdeaRow["kind"], string> = {
@@ -210,23 +223,66 @@ function accountTitle(a: IdeasAccount): string {
   return "Legacy account";
 }
 
+// Master /video-ideas page entry point. Renders one VideoIdeasGroup per
+// connected account, stacked. Cross-cutting modals (idea detail, mark-
+// done) live inside each group instance — the trade-off vs lifting them
+// to the parent is duplicated state, but each group's existing state
+// machinery (SSE refresh, drag-to-reorder, etc.) stays self-contained
+// and untouched.
 export function VideoIdeasList({
-  accounts,
-  linkableAccounts = [],
-  selectedAccountId,
-  initial,
-  targetCount,
-  preferences,
-  initialActiveJob,
+  groups,
+  linkableAccounts,
+  allIdeas,
 }: {
-  accounts: IdeasAccount[];
-  linkableAccounts?: LinkableAccount[];
-  selectedAccountId: string | null;
-  initial: VideoIdeaRow[];
-  targetCount: number;
-  preferences?: string | null;
-  initialActiveJob?: ActiveGenerationJob | null;
+  groups: AccountGroup[];
+  linkableAccounts: LinkableAccount[];
+  allIdeas: VideoIdeaRow[];
 }) {
+  void allIdeas;
+  if (groups.length === 0) {
+    return (
+      <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
+        <div className="rounded-lg border border-dashed border-neutral-300 px-6 py-14 text-center dark:border-neutral-700">
+          <h2 className="text-base font-medium text-neutral-900 dark:text-neutral-100">
+            No accounts connected
+          </h2>
+          <p className="mt-2 text-sm text-neutral-500">
+            Connect a TikTok, YouTube, or Instagram account to start
+            generating ideas tailored to it.
+          </p>
+          <Link
+            href="/integrations"
+            className="mt-4 inline-block rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+          >
+            Connect an account
+          </Link>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mx-auto max-w-3xl space-y-10 px-4 py-6 sm:px-6 sm:py-8 md:py-10">
+      {groups.map((g) => (
+        <VideoIdeasGroup
+          key={g.account.id}
+          group={g}
+          linkableAccounts={linkableAccounts}
+        />
+      ))}
+    </div>
+  );
+}
+
+function VideoIdeasGroup({
+  group,
+  linkableAccounts = [],
+}: {
+  group: AccountGroup;
+  linkableAccounts?: LinkableAccount[];
+}) {
+  const { account, ideas: initial, targetCount, preferences } = group;
+  const selectedAccountId = account.id;
+  const initialActiveJob = group.activeJob;
   const router = useRouter();
   const searchParams = useSearchParams();
   const { confirm, dialog: confirmDialog } = useConfirm();
@@ -595,11 +651,10 @@ export function VideoIdeasList({
     }
   }
 
-  function switchAccount(id: string) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("account", id);
-    router.push(`/video-ideas?${params.toString()}`);
-  }
+  // Account-switching used to live here when each page-load was scoped
+  // to one account via ?account=. The master list now renders all
+  // groups; no switcher needed.
+  void searchParams;
 
   async function refresh() {
     if (!selectedAccountId) {
@@ -856,69 +911,8 @@ export function VideoIdeasList({
     return;
   }
 
-  // Group accounts by provider for the selector.
-  const accountsByProvider = useMemo(() => {
-    const map = new Map<string, IdeasAccount[]>();
-    for (const a of accounts) {
-      const list = map.get(a.provider) ?? [];
-      list.push(a);
-      map.set(a.provider, list);
-    }
-    return map;
-  }, [accounts]);
 
-  if (accounts.length === 0) {
-    return (
-      <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 md:py-10">
-        <header className="pl-10 md:pl-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-            Video ideas
-          </h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Shoot-ready concepts grounded in your audience.
-          </p>
-        </header>
-        <div className="mt-8 rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-950 sm:p-8">
-          <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-            Connect an account to get started
-          </h2>
-          <p className="mt-2 text-sm text-neutral-500">
-            Link a TikTok account and we&apos;ll generate ideas grounded in
-            your top performers, your niche, and what&apos;s breaking out
-            right now.
-          </p>
-          <Link
-            href="/integrations"
-            className={`mt-5 inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 dark:bg-white dark:text-black dark:hover:bg-neutral-200`}
-          >
-            Go to Integrations →
-          </Link>
-        </div>
-        <ul className="mt-6 space-y-2 text-sm text-neutral-500">
-          <li className="flex items-start gap-2">
-            <span className="mt-1 inline-block h-1 w-1 shrink-0 rounded-full bg-neutral-400" />
-            <span>
-              You can connect multiple accounts and switch between them.
-            </span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="mt-1 inline-block h-1 w-1 shrink-0 rounded-full bg-neutral-400" />
-            <span>
-              Each idea ships with a full script, hashtags, post timing, and a
-              cover-frame concept.
-            </span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="mt-1 inline-block h-1 w-1 shrink-0 rounded-full bg-neutral-400" />
-            <span>
-              After you post, link the video — we&apos;ll write a post-mortem
-              and feed it into your next batch.
-            </span>
-          </li>
-        </ul>
-      </div>
-    );
-  }
+  // Empty-account state is handled in the outer VideoIdeasList wrapper.
 
   // Stats for the strip at the top — only meaningful when on the
   // posted view (or compact pending counts otherwise).
@@ -940,34 +934,23 @@ export function VideoIdeasList({
   );
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 md:py-10">
-      {/* Mobile leaves room for the fixed hamburger button (left-3 top-3) */}
-      <header className="flex flex-wrap items-center justify-between gap-3 pl-10 md:pl-0">
+    <section className="space-y-3">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <select
-            value={selectedAccountId ?? ""}
-            onChange={(e) => switchAccount(e.target.value)}
-            className="max-w-[60vw] truncate rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm font-medium text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+              account.provider === "tiktok"
+                ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
+                : account.provider === "youtube"
+                  ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                  : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200"
+            }`}
           >
-            {[...accountsByProvider.entries()].map(([provider, list]) => (
-              <optgroup
-                key={provider}
-                label={PROVIDER_LABELS[provider] ?? provider}
-              >
-                {list.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {accountTitle(a)}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          <Link
-            href="/integrations"
-            className="text-xs text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
-          >
-            +
-          </Link>
+            {PROVIDER_LABELS[account.provider] ?? account.provider}
+          </span>
+          <h2 className="truncate text-base font-semibold text-neutral-900 dark:text-neutral-100">
+            {accountTitle(account)}
+          </h2>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-neutral-500">
@@ -1198,15 +1181,9 @@ export function VideoIdeasList({
                   id={i.id}
                   position={idx + 1}
                 >
-                  <IdeaCardBody
+                  <CompactIdeaCard
                     i={i}
-                    reviewingId={reviewingId}
-                    runReviewNow={runReviewNow}
-                    setDetailIdeaId={setDetailIdeaId}
-                    setStatus={setStatus}
-                    setMarkDoneIdeaId={setMarkDoneIdeaId}
-                    remove={remove}
-                    deletePosted={deletePosted}
+                    onOpen={() => setDetailIdeaId(i.id)}
                   />
                 </SortableIdeaCard>
               ))}
@@ -1216,17 +1193,11 @@ export function VideoIdeasList({
           filtered.map((i) => (
             <article
               key={i.id}
-              className="group rounded-lg border border-neutral-200 bg-white p-4 transition hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-950 dark:hover:border-neutral-700"
+              className="group rounded-lg border border-neutral-200 bg-white transition hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-950 dark:hover:border-neutral-700"
             >
-              <IdeaCardBody
+              <CompactIdeaCard
                 i={i}
-                reviewingId={reviewingId}
-                runReviewNow={runReviewNow}
-                setDetailIdeaId={setDetailIdeaId}
-                setStatus={setStatus}
-                setMarkDoneIdeaId={setMarkDoneIdeaId}
-                remove={remove}
-                deletePosted={deletePosted}
+                onOpen={() => setDetailIdeaId(i.id)}
               />
             </article>
           ))
@@ -1259,13 +1230,28 @@ export function VideoIdeasList({
             setDetailIdeaId(null);
           }}
           onDone={() => {
-            setStatus(detailIdea.id, "done");
+            setMarkDoneIdeaId(detailIdea.id);
             setDetailIdeaId(null);
+          }}
+          onUnschedule={() => {
+            setStatus(detailIdea.id, "pending");
+            setDetailIdeaId(null);
+          }}
+          onDismiss={() => {
+            remove(detailIdea.id);
+            setDetailIdeaId(null);
+          }}
+          onDeletePosted={() => {
+            void deletePosted(detailIdea.id);
+            setDetailIdeaId(null);
+          }}
+          onReview={() => {
+            void runReviewNow(detailIdea.id);
           }}
         />
       )}
       {confirmDialog}
-    </div>
+    </section>
   );
 }
 
@@ -1274,11 +1260,19 @@ function IdeaDetailModal({
   onClose,
   onSchedule,
   onDone,
+  onUnschedule,
+  onDismiss,
+  onDeletePosted,
+  onReview,
 }: {
   idea: VideoIdeaRow;
   onClose: () => void;
   onSchedule: () => void;
   onDone: () => void;
+  onUnschedule?: () => void;
+  onDismiss?: () => void;
+  onDeletePosted?: () => void;
+  onReview?: () => void;
 }) {
   const captionTabs = useMemo(() => buildCaptionTabs(idea), [idea]);
 
@@ -1386,23 +1380,65 @@ function IdeaDetailModal({
           </Section>
         )}
 
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800">
-          {idea.status !== "scheduled" && (
-            <button
-              type="button"
-              onClick={onSchedule}
-              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            >
-              + Add to plan
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onDone}
-            className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-          >
-            Mark posted…
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+          <div className="flex flex-wrap gap-2">
+            {idea.status === "pending" && onDismiss && (
+              <button
+                type="button"
+                onClick={onDismiss}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+              >
+                Dismiss
+              </button>
+            )}
+            {idea.status === "scheduled" && onUnschedule && (
+              <button
+                type="button"
+                onClick={onUnschedule}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+              >
+                Move back to Ideas
+              </button>
+            )}
+            {idea.status === "done" && onDeletePosted && (
+              <button
+                type="button"
+                onClick={onDeletePosted}
+                className="rounded-md border border-rose-200 bg-white px-3 py-1.5 text-xs text-rose-700 transition hover:bg-rose-50 dark:border-rose-900/60 dark:bg-neutral-900 dark:text-rose-300 dark:hover:bg-rose-950/30"
+              >
+                Delete
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {idea.status === "done" && onReview && (
+              <button
+                type="button"
+                onClick={onReview}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              >
+                Review now
+              </button>
+            )}
+            {idea.status !== "scheduled" && idea.status !== "done" && (
+              <button
+                type="button"
+                onClick={onSchedule}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              >
+                + Add to plan
+              </button>
+            )}
+            {idea.status !== "done" && (
+              <button
+                type="button"
+                onClick={onDone}
+                className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+              >
+                Mark posted…
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </Modal>
@@ -1909,6 +1945,89 @@ function Stat({ label, value }: { label: string; value: string }) {
         {value}
       </div>
     </div>
+  );
+}
+
+// Compact card — clickable header that opens the detail modal.
+// Everything substantive (script, captions, virality breakdown, action
+// buttons) lives in the modal; the card itself is a kind chip + status
+// signal + title + 1-line hook tease. Mirrors what the user can scan in
+// a master feed without having to expand every card.
+function CompactIdeaCard({
+  i,
+  onOpen,
+}: {
+  i: VideoIdeaRow;
+  onOpen: () => void;
+}) {
+  const verdict = i.performance_verdict;
+  const ratio = i.performance_stats?.ratio;
+  const ready =
+    !!i.script ||
+    !!i.description ||
+    (i.hashtags?.length ?? 0) > 0 ||
+    !!i.platforms?.tiktok ||
+    !!i.platforms?.youtube ||
+    !!i.platforms?.instagram;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="block w-full rounded-lg px-4 py-3 text-left transition hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
+    >
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${KIND_COLORS[i.kind]}`}
+        >
+          {KIND_LABELS[i.kind]}
+        </span>
+        {i.status === "done" && verdict && (
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${VERDICT_COLORS[verdict]}`}
+          >
+            {VERDICT_LABELS[verdict]}
+            {ratio != null && verdict !== "too_early" && (
+              <span className="ml-1 opacity-75">· {ratio.toFixed(2)}×</span>
+            )}
+          </span>
+        )}
+        {i.status === "done" && !verdict && (
+          <span className="rounded-full bg-neutral-100 px-2 py-0.5 font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+            Review pending
+          </span>
+        )}
+        {i.status !== "done" && i.status !== "scheduled" && (
+          <span
+            className={
+              isUrgent(i.expires_at)
+                ? "text-rose-600 dark:text-rose-400"
+                : "text-neutral-500"
+            }
+          >
+            {expiresLabel(i.expires_at)}
+          </span>
+        )}
+        {i.saturation_warning && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+            <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+            Saturated
+          </span>
+        )}
+        {ready && i.status === "pending" && (
+          <span className="ml-auto inline-flex items-center rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+            Upload-ready
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+        {i.title}
+      </p>
+      {i.hook && (
+        <p className="mt-1 line-clamp-1 text-xs text-neutral-500">
+          {i.hook}
+        </p>
+      )}
+    </button>
   );
 }
 
