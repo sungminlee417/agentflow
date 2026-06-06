@@ -830,6 +830,278 @@ export async function runVideoReview({
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Cross-platform synthesis.
+//
+// The per-post reviews above answer "how did this video do on each
+// platform?" — but the creator shot ONCE and uploaded the same thing
+// everywhere, so the more useful read is "how did the SAME shoot do
+// across the platforms?". A 2.1× hit on TikTok + 0.4× flop on
+// Instagram tells the creator something specific (IG audience expects
+// shorter setup, the hook isn't translating, etc.) that no per-post
+// review can.
+//
+// runIdeaSynthesis aggregates the saved per-platform reviews into one
+// markdown post-mortem on the parent video_ideas row. It only runs
+// when 2+ sibling posts have settled (non-too_early verdicts). With a
+// single post, the per-platform review IS the review — no synthesis
+// added value. Idempotent: re-running overwrites with whatever the
+// latest per-platform reviews say.
+// ─────────────────────────────────────────────────────────────────────
+
+type SettledPost = {
+  platform: string;
+  posted_video_url: string | null;
+  performance_verdict: ReviewVerdict;
+  performance_review: string | null;
+  performance_stats: {
+    views?: number;
+    likes?: number;
+    comments?: number;
+    shares?: number;
+    engagement_rate?: number;
+    baseline_median_rate?: number;
+    ratio?: number;
+  } | null;
+};
+
+export type SynthesisResult = {
+  ok: boolean;
+  verdict?: ReviewVerdict;
+  review?: string;
+  posts?: SettledPost[];
+  error?: string;
+};
+
+function aggregateVerdict(posts: SettledPost[]): ReviewVerdict {
+  const verdicts = posts.map((p) => p.performance_verdict);
+  if (verdicts.includes("hit")) return "hit";
+  if (verdicts.every((v) => v === "underperformed")) return "underperformed";
+  return "on_track";
+}
+
+function synthesisPrompt(
+  idea: {
+    title: string;
+    kind: string;
+    format: string | null;
+    hook: string | null;
+    rationale: string | null;
+  },
+  posts: SettledPost[],
+  aggregate: ReviewVerdict,
+): string {
+  const lines: string[] = [];
+  lines.push(
+    `You are a multi-platform content analyst writing a CROSS-PLATFORM synthesis post-mortem. The creator shot one video and uploaded the same cut to ${posts.length} platforms; this synthesis is about how the SAME shoot performed differently (or similarly) across them.`,
+  );
+  lines.push("");
+  lines.push("THE IDEA:");
+  lines.push(`- Title: ${idea.title}`);
+  lines.push(`- Kind: ${idea.kind}`);
+  lines.push(`- Format: ${idea.format ?? "(unspecified)"}`);
+  lines.push(`- Hook: ${idea.hook ?? "(unspecified)"}`);
+  lines.push(`- Why it was generated: ${idea.rationale ?? "(unspecified)"}`);
+  lines.push("");
+  lines.push("PER-PLATFORM OUTCOMES:");
+  for (const p of posts) {
+    const label = PLATFORM_PROSE[p.platform] ?? p.platform;
+    const s = p.performance_stats ?? {};
+    const ratioStr =
+      s.ratio != null ? `${s.ratio.toFixed(2)}× the creator's median` : "?";
+    lines.push(
+      `- ${label}: ${p.performance_verdict.toUpperCase()} · ${ratioStr} · ${
+        s.views ?? 0
+      }v / ${s.likes ?? 0}l / ${s.comments ?? 0}c / ${s.shares ?? 0}s`,
+    );
+    if (p.performance_review) {
+      // Pull just the "Why" + "Takeaways" parts of each per-platform
+      // review so the synthesis model sees the analyst's reasoning,
+      // not just numbers.
+      const condensed = p.performance_review
+        .split(/\n+/)
+        .filter((l) => !/^#+\s*Verdict/i.test(l))
+        .join("\n")
+        .slice(0, 700);
+      lines.push(`  Per-platform analyst notes: ${condensed}`);
+    }
+  }
+  lines.push("");
+  lines.push(`AGGREGATE VERDICT: ${aggregate.toUpperCase()}`);
+  lines.push("");
+  lines.push(`Write a markdown synthesis with this exact structure:
+
+### Cross-platform verdict
+One sentence describing how the same shoot performed across the ${posts.length} platforms — specifically calling out divergence if there was any (e.g. "Hit on TikTok at 2.1× but flopped on Instagram at 0.4× — clear audience-fit divergence.")
+
+### Why the platforms diverged (or aligned)
+2-4 sentences. If divergence: name the most likely cause — algo differences (TT's For You vs YT's subscriber-feed weighting vs IG's Explore mix), audience expectations (IG expects shorter setup, YT rewards search-keyword titles, TT rewards hook within 1s), format fit, or hashtag/discovery differences. If alignment: name what specifically translated across the board.
+
+### Takeaways for the next cross-platform shoot
+- 3-5 short bullets. Each bullet is concrete and platform-aware ("Cut 2s off the intro before posting to IG — keep the full version for YT description and TT", not "make better content"). At least one bullet must be platform-specific.
+
+Be specific. Do not invent stats. Do not pad. No preamble — return only the markdown.`);
+  return lines.join("\n");
+}
+
+export async function runIdeaSynthesis({
+  supabase,
+  userId,
+  ideaId,
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  ideaId: string;
+}): Promise<SynthesisResult> {
+  const { data: idea } = await supabase
+    .from("video_ideas")
+    .select("title, kind, format, hook, rationale")
+    .eq("user_id", userId)
+    .eq("id", ideaId)
+    .maybeSingle();
+  if (!idea) return { ok: false, error: "Idea not found." };
+
+  const { data: postRows } = await supabase
+    .from("video_idea_posts")
+    .select(
+      "platform, posted_video_url, performance_verdict, performance_review, performance_stats",
+    )
+    .eq("user_id", userId)
+    .eq("idea_id", ideaId);
+
+  const settled: SettledPost[] = [];
+  for (const p of postRows ?? []) {
+    const v = p.performance_verdict as ReviewVerdict | null;
+    if (!v || v === "too_early") continue;
+    settled.push({
+      platform: p.platform as string,
+      posted_video_url: (p.posted_video_url as string | null) ?? null,
+      performance_verdict: v,
+      performance_review: (p.performance_review as string | null) ?? null,
+      performance_stats:
+        (p.performance_stats as SettledPost["performance_stats"]) ?? null,
+    });
+  }
+  if (settled.length < 2) {
+    // Single-post idea — no synthesis to add. Not an error; the caller
+    // can skip persisting.
+    return { ok: false, error: "Need 2+ settled posts for synthesis." };
+  }
+
+  const aggregate = aggregateVerdict(settled);
+
+  const { data: keys } = await supabase
+    .from("user_api_keys")
+    .select("provider, encrypted_key, model")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (!keys || keys.length === 0) {
+    return { ok: false, error: "No AI provider key configured." };
+  }
+  const { provider, encrypted_key, model: userModel } = keys[0]!;
+  if (!isProvider(provider)) {
+    return { ok: false, error: `Unknown AI provider: ${provider}` };
+  }
+  let apiKey: string;
+  try {
+    apiKey = decrypt(encrypted_key);
+  } catch {
+    return { ok: false, error: "Could not decrypt AI provider key." };
+  }
+
+  try {
+    const result = await generateText({
+      model: getModel(provider, apiKey, userModel),
+      system: synthesisPrompt(
+        {
+          title: idea.title as string,
+          kind: idea.kind as string,
+          format: idea.format as string | null,
+          hook: idea.hook as string | null,
+          rationale: idea.rationale as string | null,
+        },
+        settled,
+        aggregate,
+      ),
+      messages: [
+        {
+          role: "user",
+          content:
+            "Write the cross-platform synthesis now. Markdown only, no preamble.",
+        },
+      ],
+    });
+    return {
+      ok: true,
+      verdict: aggregate,
+      review: result.text.trim(),
+      posts: settled,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Model call failed: ${err instanceof Error ? err.message : "unknown"}`,
+    };
+  }
+}
+
+// Persist a synthesis onto the parent video_ideas row. Aggregate
+// engagement_rate / ratio are averaged across platforms so the headline
+// number on the card still means "this shoot did roughly Nx".
+export async function saveIdeaSynthesis(
+  supabase: SupabaseClient,
+  userId: string,
+  ideaId: string,
+  synthesis: SynthesisResult,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!synthesis.ok || !synthesis.posts) {
+    return { ok: false, error: synthesis.error };
+  }
+  const ratios = synthesis.posts
+    .map((p) => p.performance_stats?.ratio)
+    .filter((r): r is number => typeof r === "number");
+  const avgRatio = ratios.length
+    ? ratios.reduce((a, b) => a + b, 0) / ratios.length
+    : 0;
+  const totalViews = synthesis.posts.reduce(
+    (a, p) => a + (p.performance_stats?.views ?? 0),
+    0,
+  );
+  const totalLikes = synthesis.posts.reduce(
+    (a, p) => a + (p.performance_stats?.likes ?? 0),
+    0,
+  );
+  const totalComments = synthesis.posts.reduce(
+    (a, p) => a + (p.performance_stats?.comments ?? 0),
+    0,
+  );
+  const totalShares = synthesis.posts.reduce(
+    (a, p) => a + (p.performance_stats?.shares ?? 0),
+    0,
+  );
+  const aggregateStats = {
+    views: totalViews,
+    likes: totalLikes,
+    comments: totalComments,
+    shares: totalShares,
+    ratio: avgRatio,
+    cross_platform: true,
+    platform_count: synthesis.posts.length,
+  };
+  const { error } = await supabase
+    .from("video_ideas")
+    .update({
+      performance_verdict: synthesis.verdict ?? null,
+      performance_review: synthesis.review ?? null,
+      performance_stats: aggregateStats,
+      last_reviewed_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId)
+    .eq("id", ideaId);
+  return { ok: !error, error: error?.message };
+}
+
 // Persist a review result to the idea row.
 export async function saveReview(
   supabase: SupabaseClient,

@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
+  runIdeaSynthesis,
   runPostReview,
   runVideoReview,
+  saveIdeaSynthesis,
   savePostReview,
   saveReview,
 } from "@agentflow/core";
@@ -54,6 +56,12 @@ export async function POST(
         { status: 500 },
       );
     }
+    // Cross-platform synthesis pass — only fires when there are 2+
+    // sibling posts with settled verdicts. Failures are swallowed (the
+    // primary per-post review already succeeded; synthesis is bonus).
+    if (result.verdict && result.verdict !== "too_early") {
+      await maybeSynthesize(supabase, user.id, id);
+    }
     return NextResponse.json({
       ok: true,
       verdict: result.verdict,
@@ -95,6 +103,10 @@ export async function POST(
         ratio: result.stats?.ratio,
       });
     }
+    // After every post's per-platform review is saved, write the
+    // cross-platform synthesis (skipped server-side when <2 posts
+    // have settled).
+    await maybeSynthesize(supabase, user.id, id);
     return NextResponse.json({ ok: true, reviews });
   }
 
@@ -124,4 +136,21 @@ export async function POST(
     stats: result.stats,
     next_review_at: result.next_review_at?.toISOString() ?? null,
   });
+}
+
+// Runs the cross-platform synthesis if the idea has 2+ settled posts.
+// Silent on the "Need 2+ settled posts" no-op so single-post ideas
+// don't surface a noisy error.
+async function maybeSynthesize(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  ideaId: string,
+): Promise<void> {
+  try {
+    const synth = await runIdeaSynthesis({ supabase, userId, ideaId });
+    if (!synth.ok) return;
+    await saveIdeaSynthesis(supabase, userId, ideaId, synth);
+  } catch (err) {
+    console.error("[review-route] synthesis failed:", err);
+  }
 }

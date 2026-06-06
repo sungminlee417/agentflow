@@ -83,6 +83,11 @@ export type VideoIdeaRow = {
     engagement_rate?: number;
     baseline_median_rate?: number;
     ratio?: number;
+    /** True when this stats blob is the cross-platform synthesis
+     *  aggregate (totals across all platforms + average ratio) rather
+     *  than the legacy single-post stats. */
+    cross_platform?: boolean;
+    platform_count?: number;
   } | null;
   last_reviewed_at: string | null;
   next_review_at: string | null;
@@ -1630,8 +1635,25 @@ function PerformanceBlock({
   // haven't been re-linked since the multi-platform migration.
   const posts = i.posts ?? [];
   if (posts.length > 0) {
+    // Cross-platform synthesis: lives on the idea row when 2+ posts
+    // settled and the worker (or "Review now" all) wrote a synthesis.
+    // performance_stats.cross_platform marks it so we don't confuse it
+    // with the legacy single-post performance_review.
+    const synthesisStats = i.performance_stats;
+    const isCrossPlatform =
+      posts.length > 1 &&
+      !!i.performance_review &&
+      synthesisStats?.cross_platform === true;
     return (
       <div className="mt-3 space-y-2">
+        {isCrossPlatform && (
+          <CrossPlatformSynthesis
+            verdict={i.performance_verdict}
+            review={i.performance_review!}
+            stats={synthesisStats!}
+            platformCount={posts.length}
+          />
+        )}
         {posts.map((p) => (
           <PostPerfRow
             key={p.id}
@@ -1732,6 +1754,51 @@ function PerformanceBlock({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function CrossPlatformSynthesis({
+  verdict,
+  review,
+  stats,
+  platformCount,
+}: {
+  verdict: VideoIdeaRow["performance_verdict"];
+  review: string;
+  stats: NonNullable<VideoIdeaRow["performance_stats"]>;
+  platformCount: number;
+}) {
+  return (
+    <div className="rounded-md border border-indigo-200 bg-indigo-50/60 p-3 dark:border-indigo-900/60 dark:bg-indigo-950/30">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center rounded-full bg-indigo-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
+          Cross-platform · {platformCount}
+        </span>
+        {verdict && (
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${VERDICT_COLORS[verdict]}`}
+          >
+            {VERDICT_LABELS[verdict]}
+            {stats.ratio != null && (
+              <span className="ml-1 opacity-75">
+                · {stats.ratio.toFixed(2)}× avg
+              </span>
+            )}
+          </span>
+        )}
+        <span className="text-[11px] text-neutral-500">
+          {(stats.views ?? 0).toLocaleString()} total views
+        </span>
+      </div>
+      <details className="mt-2 text-xs" open>
+        <summary className="cursor-pointer text-neutral-700 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100">
+          Read cross-platform synthesis
+        </summary>
+        <div className="mt-1.5 whitespace-pre-wrap text-neutral-700 dark:text-neutral-300">
+          {review}
+        </div>
+      </details>
     </div>
   );
 }

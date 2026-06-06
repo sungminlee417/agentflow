@@ -2,9 +2,11 @@ import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import {
   decrypt,
+  runIdeaSynthesis,
   runIssueAgent,
   runPostReview,
   runVideoReview,
+  saveIdeaSynthesis,
   savePostReview,
   saveReview,
 } from "@agentflow/core";
@@ -210,7 +212,7 @@ async function processDuePostReviews(): Promise<void> {
   const nowIso = new Date().toISOString();
   const { data: due, error } = await supabase
     .from("video_idea_posts")
-    .select("id, user_id, platform")
+    .select("id, user_id, platform, idea_id")
     .not("next_review_at", "is", null)
     .lt("next_review_at", nowIso)
     .limit(20);
@@ -220,6 +222,12 @@ async function processDuePostReviews(): Promise<void> {
   }
   if (!due || due.length === 0) return;
 
+  // Each per-post review that succeeds queues the parent idea for a
+  // cross-platform synthesis pass. De-duped by (user_id, idea_id) so
+  // an idea with three posts reviewed in the same tick only triggers
+  // one synthesis call.
+  const synthesisQueue = new Map<string, { userId: string; ideaId: string }>();
+
   for (let i = 0; i < due.length; i += MAX_CONCURRENT_PER_TICK) {
     const batch = due.slice(i, i + MAX_CONCURRENT_PER_TICK);
     await Promise.all(
@@ -227,6 +235,7 @@ async function processDuePostReviews(): Promise<void> {
         const userId = row.user_id as string;
         const postId = row.id as string;
         const platform = row.platform as string;
+        const ideaId = row.idea_id as string;
         try {
           console.log(
             `[worker] reviewing ${platform} post ${postId} for user ${userId}`,
@@ -267,12 +276,63 @@ async function processDuePostReviews(): Promise<void> {
             console.log(
               `[worker] reviewed ${platform} post ${postId} → verdict=${result.verdict} ratio=${result.stats?.ratio.toFixed(2)}`,
             );
+            // Only synth-queue if the verdict actually settled —
+            // too_early posts don't yet contribute to the cross-
+            // platform story.
+            if (result.verdict && result.verdict !== "too_early") {
+              synthesisQueue.set(`${userId}:${ideaId}`, { userId, ideaId });
+            }
           }
         } catch (err) {
           console.error(`[worker] post review ${postId} crashed:`, err);
         }
       }),
     );
+  }
+
+  // Cross-platform syntheses for every parent idea that had at least
+  // one settled per-post review this tick. runIdeaSynthesis quietly
+  // no-ops on ideas with fewer than 2 settled posts.
+  if (synthesisQueue.size > 0) {
+    const tasks = Array.from(synthesisQueue.values());
+    for (let i = 0; i < tasks.length; i += MAX_CONCURRENT_PER_TICK) {
+      const batch = tasks.slice(i, i + MAX_CONCURRENT_PER_TICK);
+      await Promise.all(
+        batch.map(async ({ userId, ideaId }) => {
+          try {
+            const synth = await runIdeaSynthesis({ supabase, userId, ideaId });
+            if (!synth.ok) {
+              // "Need 2+ settled posts" is expected, not an error worth
+              // logging at warn level — common case for single-post ideas.
+              if (synth.error && !/Need 2\+/.test(synth.error)) {
+                console.warn(
+                  `[worker] synthesis ${ideaId} skipped: ${synth.error}`,
+                );
+              }
+              return;
+            }
+            const saved = await saveIdeaSynthesis(
+              supabase,
+              userId,
+              ideaId,
+              synth,
+            );
+            if (!saved.ok) {
+              console.error(
+                `[worker] saveIdeaSynthesis ${ideaId} failed:`,
+                saved.error,
+              );
+            } else {
+              console.log(
+                `[worker] synthesised idea ${ideaId} → ${synth.verdict} across ${synth.posts?.length} platforms`,
+              );
+            }
+          } catch (err) {
+            console.error(`[worker] synthesis ${ideaId} crashed:`, err);
+          }
+        }),
+      );
+    }
   }
 }
 
