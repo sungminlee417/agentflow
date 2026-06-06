@@ -236,7 +236,7 @@ function tiktokPrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are a TikTok content strategist. Produce exactly ${count} fresh video ideas as a JSON object.
 
-OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence. The response must START with the literal character \`{\` and END with \`}\`. Anything else fails the parser and wastes the run. The schema is at the bottom of this message — follow it exactly.
+OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
 ${describeAvailable(connected)}
@@ -333,7 +333,7 @@ function youtubePrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are a YouTube Shorts content strategist. Produce exactly ${count} fresh Short ideas as a JSON object.
 
-OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence. The response must START with the literal character \`{\` and END with \`}\`. Anything else fails the parser and wastes the run. The schema is at the bottom of this message — follow it exactly.
+OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
 ${describeYouTubeAvailable()}
@@ -423,7 +423,7 @@ function instagramPrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are an Instagram Reels content strategist. Produce exactly ${count} fresh Reels ideas as a JSON object.
 
-OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence. The response must START with the literal character \`{\` and END with \`}\`. Anything else fails the parser and wastes the run. The schema is at the bottom of this message — follow it exactly.
+OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
 ${describeInstagramAvailable()}
@@ -554,7 +554,7 @@ export async function runVideoIdeasAgent({
 
   // Scope tools to THIS specific integration so the agent doesn't
   // accidentally read another account's videos.
-  const { tools, connected } = await buildToolsForIntegrations(
+  const { tools: rawTools, connected } = await buildToolsForIntegrations(
     supabase,
     userId,
     [integration],
@@ -564,6 +564,21 @@ export async function runVideoIdeasAgent({
       ok: false,
       error: `${integration.provider} integration not connected.`,
     };
+  }
+
+  // buildToolsForIntegrations unconditionally bundles the chat-agent's
+  // CRUD tools for managing video_ideas (list/create/update/etc.) AND
+  // video_ideas_list_accounts. The generator must NOT see those —
+  // video_ideas_list_accounts in particular lets the model enumerate
+  // every account the user has, which prompts it to ask clarifying
+  // questions like "which account am I generating for, sungminlee or
+  // Hammy?" instead of producing JSON. Strip the entire CRUD set
+  // here; the generator only needs research + uploads tools.
+  const VIDEO_IDEAS_CRUD_PREFIX = "video_ideas_";
+  const tools: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(rawTools)) {
+    if (name.startsWith(VIDEO_IDEAS_CRUD_PREFIX)) continue;
+    tools[name] = value;
   }
 
   // Pull recent post-mortems for this account — they ground future
