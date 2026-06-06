@@ -54,7 +54,7 @@ pnpm dev:worker
 
 In `.env.local` at the repo root (the web app symlinks to it):
 
-```
+```bash
 # Supabase
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...   # or legacy JWT anon key
@@ -66,12 +66,24 @@ SUPABASE_SERVICE_ROLE_KEY=sb_secret_...            # or legacy JWT service-role
 #   openssl rand -hex 32
 AGENTFLOW_SECRET_KEY=<64 hex chars>
 
-# GitHub OAuth (create at https://github.com/settings/developers)
-# Callback URL: http://localhost:3000/api/oauth/github/callback for dev,
-# https://<vercel-url>/api/oauth/github/callback for prod.
+# OAuth apps — shared apps every user signs in through.
 GITHUB_OAUTH_CLIENT_ID=
 GITHUB_OAUTH_CLIENT_SECRET=
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+TIKTOK_OAUTH_CLIENT_KEY=
+TIKTOK_OAUTH_CLIENT_SECRET=
+INSTAGRAM_APP_ID=
+INSTAGRAM_APP_SECRET=
 ```
+
+Register each OAuth app once at:
+- GitHub: github.com/settings/developers
+- Google / YouTube: console.cloud.google.com/apis/credentials — enable YouTube Data API v3 + YouTube Analytics API
+- TikTok: developers.tiktok.com — Login Kit + Display API
+- Instagram: developers.facebook.com — Instagram Login product
+
+For each, set the authorized redirect URI to `http://localhost:3000/api/oauth/PROVIDER/callback` for dev and `https://YOUR-VERCEL-URL/api/oauth/PROVIDER/callback` for production. Each provider requires its own verification/approval flow before non-test users can connect.
 
 ## Deployment
 

@@ -412,8 +412,7 @@ export function IntegrationsHub({
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
           Connect one or more accounts per platform. Each account can be
-          renamed and used independently in Video Ideas. OAuth app credentials
-          and add-ons (Apify, uploads) live in each provider&apos;s modal.
+          renamed and used independently in Video Ideas.
         </p>
       </header>
 
