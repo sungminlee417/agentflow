@@ -816,7 +816,16 @@ export function VideoIdeasList({
   // the page when they all settle.
   async function refreshAll() {
     if (groups.length === 0) return;
-    await Promise.all(groups.map((g) => refreshOne(g.account.id)));
+    // Serialize per-account refreshes. Running them concurrently has
+    // every agent's system prompt + tool defs + tool results
+    // competing for the same Anthropic input-tokens-per-minute
+    // budget, which blows the tier-1 30k/min cap on a 2-3 account
+    // refresh. Sequential takes longer but each agent gets the full
+    // budget on its own, and the per-account progress strip already
+    // shows which one is in flight.
+    for (const g of groups) {
+      await refreshOne(g.account.id);
+    }
     router.refresh();
     setMessage("Generation complete.");
   }
