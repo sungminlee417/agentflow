@@ -4,6 +4,7 @@ import { z } from "zod";
 import { decrypt } from "../crypto";
 import { getModel, isProvider } from "../ai-providers";
 import { buildToolsForIntegrations, loadIntegration } from "../tools";
+import { buildVideoIdeasResearchTools } from "../tools/video-ideas-research";
 
 // Generates a balanced batch of fresh video ideas across four "kinds":
 //   • pattern    — extrapolated from the user's own top performers
@@ -130,6 +131,9 @@ const IDEAS_ENVELOPE_SCHEMA = z.union([
   z.array(IDEA_SCHEMA),
 ]);
 
+const SIMILAR_REVIEWS_TOOL_LINE =
+  "- Targeted back-catalogue lookup: video_ideas_find_similar_reviews (format/kind/title_keywords) — use BEFORE finalising any idea you're unsure about, to surface past hits/flops on the same format/topic. The strongest signal you have.";
+
 function describeAvailable(connected: string[]): string {
   const lines: string[] = [];
   lines.push(
@@ -145,6 +149,7 @@ function describeAvailable(connected: string[]): string {
       "- Transcription: tiktok_transcribe_video — use sparingly to extract the EXACT hook from a top competitor video before deriving a competitor-kind idea.",
     );
   }
+  lines.push(SIMILAR_REVIEWS_TOOL_LINE);
   lines.push(
     "- Uploaded analytics: list_my_analytics_uploads, get_analytics_upload",
   );
@@ -157,6 +162,7 @@ function describeYouTubeAvailable(): string {
     "- Per-video deep stats (real watch time + traffic): youtube_get_video_analytics, youtube_get_video_traffic_sources",
     "- Niche/competitor discovery: youtube_search_niche (query, order, published_after_days)",
     "- Audience sentiment: youtube_get_video_comments",
+    SIMILAR_REVIEWS_TOOL_LINE,
     "- Uploaded analytics CSVs: list_my_analytics_uploads, get_analytics_upload",
   ].join("\n");
 }
@@ -167,6 +173,7 @@ function describeInstagramAvailable(): string {
     "- Per-media insights (reach, saved, shares): instagram_get_media_insights",
     "- Account-level insights over time: instagram_get_account_insights",
     "- Audience sentiment: instagram_list_comments",
+    SIMILAR_REVIEWS_TOOL_LINE,
     "- Uploaded analytics CSVs: list_my_analytics_uploads, get_analytics_upload",
   ].join("\n");
 }
@@ -261,6 +268,7 @@ ${hasApify ? `5. For top 2-3 hashtags, tiktok_search_hashtag (limit 25):
 6. For 1-2 competitor handles, tiktok_get_profile (videos_limit 10).
 7. list_my_analytics_uploads — any CSV uploads.` : `5. No Apify — skip competitor/trend/rising. Lean on pattern + seasonal.
 6. list_my_analytics_uploads — any CSV uploads.`}
+8. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either (a) refine the idea so it inherits what worked, or (b) drop the idea if past attempts at the same format clearly flopped. SKIP this only when the back catalogue genuinely has no similar work yet.
 
 KINDS (balance across these)
 - pattern: extrapolate from a winning format — a NEW song/topic that fits.
@@ -350,6 +358,7 @@ PROCEDURE
 4. youtube_search_niche with queries from step-2 title-keywords (order=viewCount, published_after_days=30). Capture: high-view recent Shorts, common title hooks, non-user channels. 2-3 distinct queries.
 5. For the most engaging recent video in step 4, youtube_get_video_comments for audience questions.
 6. list_my_analytics_uploads — any YT Studio CSV.
+7. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.
 
 KINDS
 - pattern: source_refs={source_video_id, title}. Extrapolate from a top video.
@@ -439,6 +448,7 @@ PROCEDURE
 3. For top 3-5 recent Reels, instagram_get_media_insights. Reach + saves + shares matter MORE than likes; high saves = save-worthy concept.
 4. instagram_get_account_insights (days 30) — reach + profile-view trends.
 5. For the highest-engagement recent Reel, instagram_list_comments for audience questions.
+6. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.
 
 KINDS
 - pattern: source_refs={source_media_id, permalink}. Extrapolate from a top Reel.
@@ -585,6 +595,14 @@ export async function runVideoIdeasAgent({
     tools[name] = value;
   }
 
+  // Add the targeted-review retrieval tool. Scoped to this exact
+  // integration so the agent can ask "show me past comparison-format
+  // hits for this account" without leaking cross-account history.
+  Object.assign(
+    tools,
+    buildVideoIdeasResearchTools(supabase, userId, integrationId),
+  );
+
   // Pull recent post-mortems for this account. Queries through
   // video_idea_posts (rather than video_ideas) so EVERY settled
   // review feeds the learning loop — imported videos, single-platform
@@ -708,11 +726,12 @@ export async function runVideoIdeasAgent({
       ],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       tools: tools as any,
-      // Bounded at 15 steps. Beyond that the model is usually doing
-      // redundant searches rather than gathering new signal — every
-      // run we observed >15 ate Anthropic budget without producing
-      // better ideas.
-      stopWhen: stepCountIs(15),
+      // Bounded at 20 steps. Budget covers the base research pass
+      // (profile / list / top / niche search / analytics ≈ 5-7 calls)
+      // plus one video_ideas_find_similar_reviews call per idea the
+      // model is considering (up to 10). Beyond 20 the model is
+      // usually doing redundant searches rather than adding signal.
+      stopWhen: stepCountIs(20),
       onStepFinish: async (step) => {
         stepCount += 1;
         if (onStep) {

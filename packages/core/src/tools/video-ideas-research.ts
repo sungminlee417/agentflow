@@ -1,0 +1,129 @@
+import { tool } from "ai";
+import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// Per-idea review retrieval. The video-ideas generator calls this
+// when it wants targeted history on a specific format/topic it's
+// considering — rather than relying on the global "latest 8" dump
+// baked into the system prompt. Two reasons this exists:
+//
+//   1. SCALE — once the back catalogue has hundreds (let alone
+//      thousands) of reviewed posts, dumping the latest N globally
+//      blows the prompt budget AND wastes attention on irrelevant
+//      learnings. Targeted retrieval keeps tokens tight.
+//
+//   2. RELEVANCE — when the agent is sketching a "comparison Bach
+//      piece" idea, the right signal is past comparison-Bach posts,
+//      not the most recent unrelated tutorial. Filtering by
+//      format/kind/title keywords narrows directly to relevant prior
+//      work.
+//
+// Returns up to `limit` settled reviews (skips too_early since their
+// signal is noisy). Scoped to one integration so cross-account
+// learnings don't leak between a creator's TT vs YT lanes — each
+// has its own audience.
+
+export function buildVideoIdeasResearchTools(
+  supabase: SupabaseClient,
+  userId: string,
+  integrationId: string,
+) {
+  return {
+    video_ideas_find_similar_reviews: tool({
+      description:
+        "Look up post-mortems from this account's back catalogue similar to an idea you're considering. Filter by format (substring match), kind, and/or title keywords. Use BEFORE finalising any idea you're unsure about — past hits/flops on the same format are the strongest signal for whether to commit to it. Returns title, kind, format, platform, verdict (hit/on_track/underperformed), ratio vs creator's median, and the post-mortem's Takeaways section.",
+      inputSchema: z.object({
+        format: z
+          .string()
+          .optional()
+          .describe(
+            'Substring of the format field. E.g. "comparison" matches "acoustic vs classical comparison".',
+          ),
+        kind: z
+          .enum(["pattern", "trend", "rising", "competitor", "seasonal"])
+          .optional()
+          .describe("Restrict to ideas of this kind."),
+        title_keywords: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Words that should appear in the idea title (case-insensitive substring match, ANY match counts). E.g. ["bach", "classical"].',
+          ),
+        limit: z.number().int().min(1).max(20).default(8),
+      }),
+      execute: async ({ format, kind, title_keywords, limit }) => {
+        let q = supabase
+          .from("video_idea_posts")
+          .select(
+            "platform, performance_verdict, performance_stats, performance_review, last_reviewed_at, video_ideas!inner(title, kind, format)",
+          )
+          .eq("user_id", userId)
+          .eq("integration_id", integrationId)
+          .not("performance_verdict", "is", null)
+          .neq("performance_verdict", "too_early")
+          .order("last_reviewed_at", { ascending: false })
+          .limit(limit);
+
+        if (kind) {
+          // Filter via the joined idea row.
+          q = q.eq("video_ideas.kind", kind);
+        }
+        if (format && format.trim()) {
+          q = q.ilike("video_ideas.format", `%${format.trim()}%`);
+        }
+        if (title_keywords && title_keywords.length > 0) {
+          // OR-join multiple keyword ilikes against the idea title.
+          const or = title_keywords
+            .map((k) => `title.ilike.%${k.trim().replace(/[%,]/g, "")}%`)
+            .join(",");
+          q = q.or(or, { referencedTable: "video_ideas" });
+        }
+
+        const { data, error } = await q;
+        if (error) {
+          throw new Error(`find_similar_reviews failed: ${error.message}`);
+        }
+
+        type Row = {
+          platform: string | null;
+          performance_verdict: string | null;
+          performance_stats: { ratio?: number; views?: number } | null;
+          performance_review: string | null;
+          last_reviewed_at: string | null;
+          video_ideas:
+            | { title?: string; kind?: string; format?: string | null }
+            | Array<{ title?: string; kind?: string; format?: string | null }>
+            | null;
+        };
+
+        return (data as unknown as Row[]).map((row) => {
+          const idea = Array.isArray(row.video_ideas)
+            ? row.video_ideas[0]
+            : row.video_ideas;
+          let takeaways: string | null = null;
+          if (row.performance_review) {
+            const tIdx = row.performance_review.indexOf("Takeaways");
+            if (tIdx >= 0) {
+              takeaways = row.performance_review
+                .slice(tIdx)
+                .replace(/^[#\s]*Takeaways[^\n]*\n?/, "")
+                .trim()
+                .slice(0, 600);
+            }
+          }
+          return {
+            title: idea?.title ?? null,
+            kind: idea?.kind ?? null,
+            format: idea?.format ?? null,
+            platform: row.platform,
+            verdict: row.performance_verdict,
+            ratio: row.performance_stats?.ratio ?? null,
+            views: row.performance_stats?.views ?? null,
+            takeaways,
+            reviewed_at: row.last_reviewed_at,
+          };
+        });
+      },
+    }),
+  };
+}

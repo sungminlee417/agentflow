@@ -33,6 +33,18 @@ const TOOL_LABELS: Record<string, string> = {
   tiktok_transcribe_video: "Transcribing a competitor video",
   list_my_analytics_uploads: "Reading your uploaded analytics",
   get_analytics_upload: "Reading an analytics file",
+  video_ideas_find_similar_reviews: "Pulling lessons from similar past posts",
+  youtube_get_my_channel: "Reading your YouTube channel",
+  youtube_list_my_videos: "Reading your recent YouTube videos",
+  youtube_get_video_analytics: "Pulling YouTube Analytics for a video",
+  youtube_get_video_traffic_sources: "Checking YouTube traffic sources",
+  youtube_search_niche: "Searching the YouTube niche",
+  youtube_get_video_comments: "Reading audience comments",
+  instagram_get_my_account: "Reading your Instagram account",
+  instagram_list_my_media: "Reading your recent Instagram media",
+  instagram_get_media_insights: "Pulling Instagram insights for a post",
+  instagram_get_account_insights: "Pulling Instagram account insights",
+  instagram_list_comments: "Reading Instagram comments",
 };
 
 function humanizeStep(raw: string): string {
