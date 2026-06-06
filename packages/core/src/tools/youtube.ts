@@ -45,7 +45,7 @@ export function buildYouTubeTools(token: string) {
   return {
     youtube_get_my_channel: tool({
       description:
-        "Get the authenticated user's primary YouTube channel: id, title, description, subscriber/view/video counts, default language. Call once at the start of a YouTube analysis to anchor what 'my channel' means.",
+        "Authenticated user's channel: id, title, subscriber/view/video counts. Call once to anchor 'my channel'.",
       inputSchema: z.object({}),
       execute: async () => {
         const data = (await yt(
@@ -90,7 +90,7 @@ export function buildYouTubeTools(token: string) {
 
     youtube_list_my_videos: tool({
       description:
-        "List the authenticated user's most recent uploaded videos. Returns id, title, description, publishedAt, thumbnails, and stats (views/likes/comments).",
+        "User's most recent uploads. Returns id, title, description, publishedAt, thumbnail, tags, duration, stats (views/likes/comments).",
       inputSchema: z.object({
         limit: z.number().int().min(1).max(50).default(20),
       }),
@@ -160,7 +160,7 @@ export function buildYouTubeTools(token: string) {
 
     youtube_get_video_analytics: tool({
       description:
-        "Pull per-video analytics from the YouTube Analytics API: views, CTR (impressions click-through rate), average view duration, average view percentage, likes, subscribers gained. Use to judge how a video actually performs vs. just public counts.",
+        "Per-video Analytics API metrics: views, watch time, avg view duration, avg view %, likes, subscribers gained, CTR. The real performance picture beyond public counts.",
       inputSchema: z.object({
         video_id: z.string(),
         start_date: z
@@ -203,7 +203,7 @@ export function buildYouTubeTools(token: string) {
 
     youtube_get_video_traffic_sources: tool({
       description:
-        "Where viewers came from for a given video (YouTube search vs suggested vs browse vs external etc.). Returns rows of { source, views, watch_time_minutes }.",
+        "Traffic-source breakdown for a video (Search vs Suggested vs Browse vs External). Rows of { source, views, watch_time_minutes }.",
       inputSchema: z.object({
         video_id: z.string(),
         days: z.number().int().min(1).max(365).default(28),
@@ -232,7 +232,7 @@ export function buildYouTubeTools(token: string) {
 
     youtube_search_niche: tool({
       description:
-        "Search YouTube for videos matching a query — use to discover what's trending in the creator's niche. Returns id, title, channel, publishedAt, view counts.",
+        "Search YouTube by query — discover niche/competitor videos. Returns id, title, channel, publishedAt, views, likes.",
       inputSchema: z.object({
         query: z.string(),
         max_results: z.number().int().min(1).max(50).default(15),
@@ -302,7 +302,7 @@ export function buildYouTubeTools(token: string) {
 
     youtube_get_video_comments: tool({
       description:
-        "Top-level comments on a video. Useful for sentiment analysis or finding common questions in the audience.",
+        "Top-level comments on a video — audience sentiment + common questions.",
       inputSchema: z.object({
         video_id: z.string(),
         limit: z.number().int().min(1).max(100).default(20),

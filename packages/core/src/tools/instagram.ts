@@ -36,7 +36,7 @@ export function buildInstagramTools(token: string) {
   return {
     instagram_get_my_account: tool({
       description:
-        "Get the authenticated Instagram Business/Creator account: id, username, profile picture, name, bio, follower/following/media counts.",
+        "Authenticated IG Business/Creator account: id, username, name, bio, follower/following/media counts.",
       inputSchema: z.object({}),
       execute: async () => {
         return await ig(token, "/me", {
@@ -50,7 +50,7 @@ export function buildInstagramTools(token: string) {
 
     instagram_list_my_media: tool({
       description:
-        "List the authenticated user's recent Instagram media (posts, reels, carousels). Returns id, caption, media_type, media_url, permalink, timestamp, and stats (like_count, comments_count).",
+        "User's recent IG media (posts, reels, carousels). Returns id, caption, media_type, permalink, timestamp, like_count, comments_count.",
       inputSchema: z.object({
         limit: z.number().int().min(1).max(50).default(20),
       }),
@@ -68,7 +68,7 @@ export function buildInstagramTools(token: string) {
 
     instagram_get_media_insights: tool({
       description:
-        "Per-media insights for a Business/Creator post: reach, impressions, saved, video_views, plays. Use to judge actual performance beyond surface counts.",
+        "Per-media insights: reach, impressions, saved, shares, total_interactions. Real performance beyond likes.",
       inputSchema: z.object({
         media_id: z.string(),
       }),
@@ -90,7 +90,7 @@ export function buildInstagramTools(token: string) {
 
     instagram_get_account_insights: tool({
       description:
-        "Account-level insights for a Business/Creator account over a time window: reach, profile_views, follower_count. Defaults to the last 30 days.",
+        "Account-level insights over N days: reach, profile_views, follower_count. Default 30d.",
       inputSchema: z.object({
         days: z.number().int().min(1).max(90).default(30),
       }),
@@ -123,7 +123,7 @@ export function buildInstagramTools(token: string) {
 
     instagram_list_comments: tool({
       description:
-        "List comments on a given Instagram media. Returns id, text, username, timestamp, like_count.",
+        "Comments on a media. Returns id, text, username, timestamp, like_count.",
       inputSchema: z.object({
         media_id: z.string(),
         limit: z.number().int().min(1).max(50).default(20),

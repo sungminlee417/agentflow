@@ -236,127 +236,81 @@ function tiktokPrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are a TikTok content strategist. Produce exactly ${count} fresh video ideas as a JSON object.
 
-Today is ${today}.
-
-Available tools:
+Today is ${today}. Tools:
 ${describeAvailable(connected)}
 ${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}${platformsBlock(targetPlatforms)}
 
-Required procedure:
-1. tiktok_top_my_videos (top_n 10, from_history 100) — these are the creator's lifetime best by engagement rate (likes ÷ views), pulled across their last ~100 uploads. This tells you what their audience actually rewards, not just what they posted recently.
-2. tiktok_list_my_videos (max_count 20) — most recent 20 uploads. This tells you the creator's CURRENT voice / pacing / topic focus, even if recent videos haven't all popped. Match scripts to this voice.
-3. Cross-reference: the patterns in the top 10 are what works for this audience; the recent 20 is how this creator currently sounds. Your ideas should hit the top-10 patterns delivered in the recent-20 voice.
-4. Extract the creator's most-used hashtags from the top performers.
-4b. TIMING SIGNAL: from the top 10 performers' create_time values, note the day-of-week + hour patterns (convert from unix seconds to UTC, then state the assumption that the creator's audience is roughly in their own timezone). This becomes the basis for each idea's optimal_post_window.
-4c. AUDIO/SOUND: scan the top performers for music_meta or recurring audio. If the creator has a winning sound pattern (original audio vs trending), capture it.
-${hasApify ? `5. For each of the top 2-3 hashtags, tiktok_search_hashtag (limit 25). From the results:
-   (a) Note what's trending right now (high recent engagement)
-   (b) **Velocity check** — group videos by week using create_time. If the past 3-7 days' top performers have notably HIGHER engagement (likes/views) than the prior 7-14 days, that hashtag/topic is ACCELERATING. Call this out — it's the seed for rising-kind ideas.
-   (c) **Saturation check** — if a hashtag has 15+ recent videos with engagement clearly BELOW the niche median (e.g. half), it's oversaturated. Don't recommend pattern ideas in that exact format without a strong twist — flag it in saturation_warning.
-   (d) Collect 3-5 distinct authors (NOT the user) who consistently post in this niche — these are auto-discovered competitors.
-6. For 1-2 of those competitor handles, tiktok_get_profile (videos_limit 10) to surface songs/formats they covered well that the user hasn't.
-7. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.` : `5. Skip Apify-backed competitor + trend + rising discovery (not configured). Lean harder on pattern + seasonal kinds.
-6. list_my_analytics_uploads — read any CSV uploads for deeper retention/traffic-source signal.`}
+PROCEDURE
+1. tiktok_top_my_videos (top_n 10, from_history 100) — lifetime best by engagement rate.
+2. tiktok_list_my_videos (max_count 20) — current voice / pacing / topic focus.
+3. Cross-reference: ideas hit top-10 patterns delivered in recent-20 voice.
+4. Extract most-used hashtags from top performers.
+4b. TIMING — from top-10 create_time, derive day-of-week + hour patterns (convert unix→UTC; assume audience in creator's TZ). Feeds optimal_post_window.
+4c. AUDIO — scan top performers for music_meta / recurring audio.
+${hasApify ? `5. For top 2-3 hashtags, tiktok_search_hashtag (limit 25):
+   (a) trending right now;
+   (b) VELOCITY: group by week. Past 3-7d top performers outperform prior 7-14d → ACCELERATING → seed rising-kind;
+   (c) SATURATION: 15+ recent videos clearly below niche median → flag in saturation_warning;
+   (d) 3-5 distinct non-user authors → competitors.
+6. For 1-2 competitor handles, tiktok_get_profile (videos_limit 10).
+7. list_my_analytics_uploads — any CSV uploads.` : `5. No Apify — skip competitor/trend/rising. Lean on pattern + seasonal.
+6. list_my_analytics_uploads — any CSV uploads.`}
 
-Now produce exactly ${count} ideas, balanced across these kinds based on what's available:
-- "pattern": extrapolated from the user's own winning format. Suggest a specific NEW song / topic / target they haven't covered that fits the pattern.
-- ${hasApify ? `"competitor": cite the competitor handle in source_refs ({competitor_handle: "...", competitor_video_url: "..."}). The idea must be something they nailed that the user hasn't.` : `"competitor": skip — no competitor data available without Apify.`}
-- ${hasApify ? `"trend": cite the hashtag and/or trending sound in source_refs. The trend is CURRENTLY visible in the niche — already in motion but not yet saturated.` : `"trend": skip — no trend data available without Apify.`}
-- ${hasApify ? `"rising": engagement velocity is ACCELERATING in the last 3-7 days but the trend hasn't peaked. Cite specific evidence in source_refs ({hashtag: "...", velocity_note: "engagement up ~Nx vs prior week", sample_url: "..."}) — never label something "rising" without that velocity comparison from your tool data. These are the "be early to the curve" plays. Keep these to 1-2 per refresh max.` : `"rising": skip — no velocity data available without Apify.`}
-- "seasonal": calendar-anchored — a holiday, anniversary of a famous piece, a known meme day. Include hard_date (ISO 8601) for when the idea should ship by. Today is ${today}; only suggest hard_dates in the next 60 days.
+KINDS (balance across these)
+- pattern: extrapolate from a winning format — a NEW song/topic that fits.
+- ${hasApify ? `competitor: source_refs={competitor_handle, competitor_video_url}. Something they nailed and the user hasn't.` : `competitor: skip (no Apify).`}
+- ${hasApify ? `trend: source_refs={hashtag, trending_sound?}. Currently visible, not yet saturated.` : `trend: skip (no Apify).`}
+- ${hasApify ? `rising: velocity ACCELERATING last 3-7d. source_refs must include velocity_note. Max 1-2 per refresh.` : `rising: skip (no Apify).`}
+- seasonal: calendar-anchored. hard_date in next 60 days (ISO 8601).
 
-Critical:
-- Every idea MUST be grounded in something you actually saw in a tool result. No invented stats, no invented competitor handles, no invented trending hashtags.
-- Each title must be specific and recordable — "Cover Hotel California — acoustic vs classical" not "do another comparison video".
-- hook must be the actual first spoken/shown line.
-- format should be short ("acoustic vs classical comparison", "solo performance with text overlay").
-- rationale: 1-2 sentences citing the specific evidence ("your top 3 videos all use this format; song X has high search volume in #fingerstyle this week").${hasReviews ? `
-  WHEN A PRIOR POST-MORTEM ABOVE IS RELEVANT (same format, same hook style, similar topic), the rationale MUST cite it by title and verdict. Examples: "Extends your 'Hotel California — acoustic vs classical' hit (2.1× median)." Or: "Replaces the underperforming 'Bach Prelude solo' format (0.43×) — comparison hook instead." Ignoring an applicable post-mortem when one exists is the worst failure mode here.` : ""}
-- saturation_warning (NULL or short string): only set this when you saw the SPECIFIC format or topic showing saturation signals (lots of similar recent videos with below-niche-median engagement). Be specific — e.g. "Acoustic-vs-classical comparisons of Bach pieces have 30+ posts in #fingerstyle this month with median engagement dropping ~40% — twist needed to stand out (suggested in the script)." Leave null when there's no saturation concern.${hasReviews ? `
-- The post-mortems above are GROUND TRUTH from videos this creator already shipped. Steer toward formats/hooks that hit; steer away from ones that underperformed. When you reuse a winning pattern, say so in the rationale.` : ""}
+RULES
+- Ground EVERY idea in a tool result — no invented stats, handles, or hashtags.
+- title: specific + recordable ("Cover Hotel California — acoustic vs classical").
+- hook: actual first spoken/shown line.
+- format: short ("acoustic vs classical comparison").
+- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies (same format/hook/topic), the rationale MUST cite it by title + verdict.` : ""}
+- saturation_warning: short string only when you saw the SPECIFIC format with saturation signals; else null.
 
-Upload-ready content for EVERY idea — the creator should be able to record + post directly from the card without writing anything new:
-
-- script: a SHOOT-READY breakdown the creator can follow shot-for-shot. Structure it as labeled time-stamped blocks, one per line, each containing EVERY relevant cue. Required block types in this order:
-
+SCRIPT (one beat per line, timestamps, all cues explicit)
     [0:00-0:03] HOOK
-      📢 SAY: "<the exact words to speak, in quotes>"  (or write SHOW: if it's silent text)
-      🎬 ACTION: <what you're doing on camera — pick up the guitar, lean in, jump-cut from one frame to another>
-      📺 ON-SCREEN TEXT: "<exact words to put on screen, in quotes>" (or "none")
-      🎵 AUDIO: <music cue, original audio, ambient — be specific>
-
+      📢 SAY: "<exact words>" (or SHOW: silent text)
+      🎬 ACTION: <on-camera>
+      📺 ON-SCREEN TEXT: "<words>" (or "none")
+      🎵 AUDIO: <music cue / original / ambient>
     [0:03-0:10] BEAT 1 — Setup
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      📺 ON-SCREEN TEXT: "<...>"
-
-    [0:10-0:25] BEAT 2 — Payoff / Demo
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      📺 ON-SCREEN TEXT: "<...>"
-      ✂️ CUT: <transition note — hard cut, whip pan, match cut on a specific motion>
-
+    [0:10-0:25] BEAT 2 — Payoff / Demo (include ✂️ CUT)
     [0:25-0:35] BEAT 3 — Twist / Comparison
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      📺 ON-SCREEN TEXT: "<...>"
+    [0:35-0:40] CTA — exact ask + on-screen text + gesture
+Each BEAT has SAY/ACTION/ON-SCREEN TEXT (and AUDIO/CUT where relevant). HOOK ≤3s, CTA ≤5s, total ≤60s. Match creator's voice from list/top tools.
 
-    [0:35-0:40] CTA
-      📢 SAY: "<the explicit ask, word-for-word>"
-      📺 ON-SCREEN TEXT: "<short version of the ask, e.g. 'COMMENT YOUR PICK 👇'>"
-      🎬 ACTION: <gesture toward comments, hold a still frame, etc.>
+CAPTION
+- post_title: ≤100 chars, attention-grabbing.
+- description: 2-3 short paragraphs ending with CTA. No inline hashtags.
+- hashtags: 5-7 strings, no leading '#'. Mix broad-niche + specific + 1-2 trend tags you actually saw.
+- cta: one explicit ask ("Comment 'nylon' or 'steel' below 👇").
+- visual_notes: 4-6 bullets "• " (lighting, framing, props, B-roll, color grade).
 
-    The creator should not have to think — every spoken line, every on-screen text overlay, every camera action is explicit. Times are guidelines (TikTok ≤60s); adjust block lengths to fit but keep the HOOK ≤3s and CTA ≤5s. Match the creator's voice and pacing from tiktok_list_my_videos / tiktok_top_my_videos — never invent a personality.
+VIRALITY
+- optimal_post_window: "Tue-Thu 7-9pm local" (from step 4b; caveat if signal weak).
+- suggested_duration: seconds, e.g. "18-25s" (comparison/demo 18-25s, tutorial 35-50s, teaser 7-12s).
+- thumbnail_concept: ONE visual sentence ("close-up of two guitar headstocks, bold text 'WHICH SOUNDS BETTER?'").
+- engagement_hook: SPECIFIC comment-driver, distinct from opening hook.
+- trending_sound: name with sound id/URL if found in tool results; else null. Never invent.
 
-- post_title: the catchy headline that goes at the top of the caption (≤100 chars, attention-grabbing question or claim).
-- description: full caption body — 2-3 short paragraphs, conversational, ending with the CTA. Do NOT include hashtags here; they go in the hashtags field.
-- hashtags: 5-7 strings WITHOUT the leading '#'. Mix broad-niche (e.g. "guitar") with specific (e.g. "fingerstyle") with one or two trend tags if available from your tool calls. NEVER invent a hashtag.
-- cta: one explicit ask in a single sentence ("Comment 'nylon' or 'steel' below 👇").
-- visual_notes: 4-6 short bullets covering things NOT already in the script blocks — overall lighting setup, framing (close-up vs wide), props/wardrobe, B-roll inserts, color grade, anything specific to your shooting setup. Plain text, "• " prefix per bullet.
+Return ONLY a JSON object {ideas:[...]} matching:
+{ "ideas":[{
+  "title":string, "hook":string, "format":string, "rationale":string,
+  "kind":"pattern"|"trend"|"rising"|"competitor"|"seasonal",
+  "source_refs":{...}, "hard_date":string, "saturation_warning":string|null,
+  "script":string, "post_title":string, "description":string,
+  "hashtags":[string], "cta":string, "visual_notes":string,
+  "optimal_post_window":string, "suggested_duration":string,
+  "thumbnail_concept":string, "engagement_hook":string,
+  "trending_sound":string|null,
+  "platforms":{ "tiktok":{ "caption":string, "hashtags":[string] } }
+}] }
 
-Virality fields — fill ALL of these for every idea (these are the levers that actually move reach):
-
-- optimal_post_window: human-readable day-of-week + hour range to post for best reach, derived from step 4b. Format: "Tue-Thu 7-9pm local time". If you don't have strong signal from the top performers, state your best guess + the caveat: "Mon-Wed 6-9pm local time (limited signal from top videos)".
-- suggested_duration: recommended length window in seconds for THIS idea's format. Comparison/demo formats often work at 18-25s; tutorial deep-dives at 35-50s; teaser hooks at 7-12s. Match it to what the top performers in the creator's catalog use for the same format.
-- thumbnail_concept: ONE sentence describing what the first frame (= the cover shown in the For You feed) should look like. Be visual: "Tight close-up of two guitar headstocks side by side, big white text 'WHICH SOUNDS BETTER?' across the top." This is as important as the hook for getting tapped in feed.
-- engagement_hook: a SPECIFIC element designed to drive COMMENTS (distinct from the opening hook which is about stopping the scroll). E.g. "Hold the final note 2s longer on one option than the other so viewers have to comment which one they liked more." Or "Phrase the on-screen text as a question viewers can answer in one word."
-- trending_sound: if a specific TikTok sound (original audio creator + song name, ideally with the sound id or URL) is currently trending in the niche AND fits this idea, name it explicitly: "@username's 'Song Title' (sound id: 1234...) — viral in #fingerstyle the past 2 weeks." If none is appropriate, set this to null. NEVER invent a sound that didn't come from a tool result.
-
-Return ONLY a JSON object {ideas: [...]} matching the schema below. No commentary, no markdown, no code fence.
-
-JSON schema for the final response:
-{
-  "ideas": [
-    {
-      "title": string,
-      "hook": string,
-      "format": string,
-      "rationale": string,
-      "kind": "pattern" | "trend" | "rising" | "competitor" | "seasonal",
-      "source_refs": { ... },        // free-form object, e.g. { "competitor_handle": "@x", "hashtag": "#y", "velocity_note": "...", "url": "https://..." }
-      "hard_date": string,           // only for seasonal, ISO 8601 date
-      "saturation_warning": string | null,  // null when no signal of saturation
-      "script": string,              // beat-by-beat, with timestamps
-      "post_title": string,
-      "description": string,
-      "hashtags": [string, ...],     // no leading '#'
-      "cta": string,
-      "visual_notes": string,
-      "optimal_post_window": string, // "Tue-Thu 7-9pm local"
-      "suggested_duration": string,  // "18-25s"
-      "thumbnail_concept": string,
-      "engagement_hook": string,
-      "trending_sound": string | null,
-      "platforms": {                  // per-platform caption packaging; include ONLY the platforms listed in the PER-PLATFORM PACKAGING block above
-        "tiktok":    { "caption": string, "hashtags": [string, ...] },
-        "youtube":   { "title": string, "description": string, "hashtags": [string, ...] },
-        "instagram": { "caption": string, "hashtags": [string, ...] }
-      }
-    }
-  ]
-}
-
-Your VERY LAST message must be this JSON and nothing else. Do not say "Here are the ideas:" or wrap in \`\`\`.`;
+Your LAST message is this JSON only — no prose, no code fence.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -377,114 +331,73 @@ function youtubePrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are a YouTube Shorts content strategist. Produce exactly ${count} fresh Short ideas as a JSON object.
 
-Today is ${today}.
-
-Available tools:
+Today is ${today}. Tools:
 ${describeYouTubeAvailable()}
 ${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
 
-Required procedure:
-1. youtube_get_my_channel — anchor what "my channel" is. Note subscriber count + recent upload cadence.
-2. youtube_list_my_videos (limit 25) — recent uploads. Note title-keyword patterns and which titles got the most views relative to channel median.
-3. For the top 2-3 most-viewed recent videos, youtube_get_video_analytics + youtube_get_video_traffic_sources. The traffic-source breakdown is the high-leverage signal — "YouTube Search" vs "Browse Features" vs "Suggested Videos" tells you whether the channel grows on discovery or recommendations.
-4. youtube_search_niche with the channel's core topic (queries derived from the recurring title-keywords in step 2). Use order=viewCount + published_after_days=30. Look for: (a) high-view recent Shorts in the niche, (b) common title hooks, (c) channels other than the user's. Run 2-3 distinct queries.
-5. For the most engaging recent video in step 4, youtube_get_video_comments to surface what the audience is asking for in the niche.
-6. list_my_analytics_uploads — read any uploaded YT Studio CSV for deeper retention/CTR signal.
+PROCEDURE
+1. youtube_get_my_channel — anchor "my channel". Note subs + upload cadence.
+2. youtube_list_my_videos (limit 25) — title-keyword patterns + which titles got the most views vs channel median.
+3. For the top 2-3 most-viewed recent videos: youtube_get_video_analytics + youtube_get_video_traffic_sources. The traffic-source breakdown (Search vs Browse vs Suggested) shows whether the channel grows on discovery or recommendations.
+4. youtube_search_niche with queries from step-2 title-keywords (order=viewCount, published_after_days=30). Capture: high-view recent Shorts, common title hooks, non-user channels. 2-3 distinct queries.
+5. For the most engaging recent video in step 4, youtube_get_video_comments for audience questions.
+6. list_my_analytics_uploads — any YT Studio CSV.
 
-Now produce exactly ${count} ideas, balanced across:
-- "pattern": extrapolates from one of the user's own top videos. Cite the source video id + title in source_refs ({source_video_id: "...", title: "..."}).
-- "competitor": cite a competitor video discovered in step 4 in source_refs ({competitor_channel: "...", competitor_video_url: "https://..."}). The angle must be something they nailed that the user hasn't.
-- "trend": cite the niche query + a high-view example in source_refs ({query: "...", example_url: "..."}). Trend means CURRENTLY surging in YouTube Search / Browse for this niche.
-- "rising": same as trend but with an explicit velocity claim — videos posted in the last 3-7 days outperforming the prior 7-14 days for the same query. Keep to 1-2 per refresh max.
-- "seasonal": calendar-anchored. Include hard_date (ISO 8601). Today is ${today}; only suggest hard_dates in the next 60 days.
+KINDS
+- pattern: source_refs={source_video_id, title}. Extrapolate from a top video.
+- competitor: source_refs={competitor_channel, competitor_video_url}. Angle they nailed and user hasn't.
+- trend: source_refs={query, example_url}. Currently surging in YT Search/Browse.
+- rising: trend + explicit velocity (last 3-7d outperforming prior 7-14d for same query). Max 1-2 per refresh.
+- seasonal: hard_date (ISO 8601), next 60 days only.
 
-Critical:
-- Every idea MUST be grounded in something you actually saw in a tool result. No invented stats, no invented competitor channels, no made-up search terms.
-- Each title must be search-keyword-optimised AND clickable. Front-load the keyword phrase (e.g. "Beginner Fingerstyle Riff in 30 Seconds" not "30 second clip!").
-- hook must be the actual first 1-2 seconds (spoken line + on-screen text). YT Shorts retention dies in seconds.
-- format should be short ("comparison demo", "before/after tutorial", "speed-run riff").
-- rationale: 1-2 sentences citing specific evidence ("your last 3 Shorts that broke 10k views all front-load 'beginner'; queries for 'beginner fingerstyle riff' have 30+ Shorts >50k views in the last week").${hasReviews ? `
-  WHEN A PRIOR POST-MORTEM ABOVE IS RELEVANT, the rationale MUST cite it by title and verdict.` : ""}
-- saturation_warning (NULL or short string): set only if you saw the SPECIFIC format showing saturation signals in the niche.${hasReviews ? `
-- The post-mortems above are GROUND TRUTH from videos the creator has already shipped. Steer toward formats/titles that hit, away from ones that underperformed.` : ""}
+RULES
+- Ground EVERY idea in a tool result — no invented stats, channels, or queries.
+- title: search-keyword-optimised + clickable. Front-load the keyword ("Beginner Fingerstyle Riff in 30 Seconds").
+- hook: actual first 1-2s (spoken + on-screen). Shorts retention dies fast.
+- format: short ("comparison demo", "before/after tutorial").
+- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies, the rationale MUST cite it by title + verdict.` : ""}
+- saturation_warning: only when you saw the SPECIFIC format saturating; else null.
 
-Upload-ready content for EVERY idea:
-
-- script: a SHOOT-READY breakdown, labeled time-stamped blocks, one per line. Required blocks in order:
-
+SCRIPT (timestamps, all cues explicit, max 60s total)
     [0:00-0:02] HOOK
-      📢 SAY: "<the exact words to speak>"
-      🎬 ACTION: <on-camera action>
-      📺 ON-SCREEN TEXT: "<words on screen>"
-      🎵 AUDIO: <music cue / original audio / ambient>
-
+      📢 SAY: "<exact words>"
+      🎬 ACTION: <on-camera>
+      📺 ON-SCREEN TEXT: "<words>"
+      🎵 AUDIO: <cue>
     [0:02-0:15] BEAT 1 — Setup
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      📺 ON-SCREEN TEXT: "<...>"
-
-    [0:15-0:35] BEAT 2 — Payoff / Demo
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      ✂️ CUT: <transition>
-
+    [0:15-0:35] BEAT 2 — Payoff / Demo (include ✂️ CUT)
     [0:35-0:50] BEAT 3 — Twist / Comparison
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
+    [0:50-1:00] CTA — exact ask + ON-SCREEN TEXT ("SUBSCRIBE" / "COMMENT YOUR PICK")
+HOOK ≤2s, CTA ≤8s, total ≤60s. Match creator's voice from youtube_list_my_videos.
 
-    [0:50-1:00] CTA
-      📢 SAY: "<explicit ask>"
-      📺 ON-SCREEN TEXT: "<short ask, e.g. 'SUBSCRIBE' or 'COMMENT YOUR PICK'>"
-
-    Shorts MAX 60s — keep total under :60. HOOK ≤2s, CTA ≤8s. Match the creator's voice from youtube_list_my_videos.
-
-- post_title: the YouTube Shorts title (≤100 chars). Front-load the keyword phrase. Include #Shorts somewhere if it fits naturally but don't force it.
-- description: 3-5 short paragraphs. This text is search-index payload — repeat the spoken keyword phrases. End with the CTA. Include line breaks between paragraphs. Hashtags do NOT go here.
-- hashtags: 3 strings WITHOUT the leading '#'. Only 3 — YouTube surfaces only the first 3 above the video player. Pick the most specific niche tags.
+CAPTION
+- post_title: ≤100 chars. Front-load keyword. "#Shorts" only if natural.
+- description: 3-5 short paragraphs (the search-index payload — repeat spoken keywords). Ends with CTA. No inline hashtags.
+- hashtags: EXACTLY 3 strings, no leading '#'. YT only surfaces the first 3.
 - cta: one explicit ask ("Subscribe for more 30-second riffs every Friday").
-- visual_notes: 4-6 short bullets — lighting, framing (9:16 vertical for Shorts), props, B-roll inserts, color grade. "• " prefix per bullet.
+- visual_notes: 4-6 bullets "• " (lighting, framing 9:16, props, B-roll, color grade).
 
-Virality fields — fill ALL for every idea:
+VIRALITY
+- optimal_post_window: "Tue-Thu 4-6pm local" (derive from analytics; caveat if weak signal).
+- suggested_duration: seconds, ≤60. Comparison/tutorial 30-45s, high-energy hook 12-20s.
+- thumbnail_concept: ONE visual sentence — the cover frame.
+- engagement_hook: SPECIFIC comment/replay driver.
+- trending_sound: null. (YT uses its own audio library; no algorithmic trending sound.)
 
-- optimal_post_window: human-readable day-of-week + hour range, derived from analytics where possible. YT's discovery curves favor weekdays late afternoon/early evening US time for most channels. Format: "Tue-Thu 4-6pm local time". State your caveat if signal is weak.
-- suggested_duration: target length in seconds, MAX 60. Comparison/tutorial Shorts often work at 30-45s; high-energy hooks at 12-20s. Match the top-viewed Shorts in the creator's catalog for the same format.
-- thumbnail_concept: ONE sentence describing the cover frame. The cover is critical for Shorts browse-feed taps. Be visual: "Split-screen two guitar headstocks with bold yellow text 'WHICH SOUNDS BETTER?' across the top half."
-- engagement_hook: a SPECIFIC element designed to drive COMMENTS or REPLAYS (drives algo). E.g. "End on a held note 2s longer than the other side so viewers comment which they preferred."
-- trending_sound: leave as null for YouTube — YT Shorts uses its own audio library, not algorithmically-trending sounds the way TikTok does. Set this to null.
+Return ONLY a JSON object {ideas:[...]} matching:
+{ "ideas":[{
+  "title":string, "hook":string, "format":string, "rationale":string,
+  "kind":"pattern"|"trend"|"rising"|"competitor"|"seasonal",
+  "source_refs":{...}, "hard_date":string, "saturation_warning":string|null,
+  "script":string, "post_title":string, "description":string,
+  "hashtags":[string,string,string], "cta":string, "visual_notes":string,
+  "optimal_post_window":string, "suggested_duration":string,
+  "thumbnail_concept":string, "engagement_hook":string,
+  "trending_sound":null,
+  "platforms":{ "youtube":{ "title":string, "description":string, "hashtags":[string,string,string] } }
+}] }
 
-Return ONLY a JSON object {ideas: [...]} matching the schema below.
-
-JSON schema for the final response:
-{
-  "ideas": [
-    {
-      "title": string,
-      "hook": string,
-      "format": string,
-      "rationale": string,
-      "kind": "pattern" | "trend" | "rising" | "competitor" | "seasonal",
-      "source_refs": { ... },
-      "hard_date": string,
-      "saturation_warning": string | null,
-      "script": string,
-      "post_title": string,
-      "description": string,
-      "hashtags": [string, string, string],
-      "cta": string,
-      "visual_notes": string,
-      "optimal_post_window": string,
-      "suggested_duration": string,
-      "thumbnail_concept": string,
-      "engagement_hook": string,
-      "trending_sound": null,
-      "platforms": {
-        "youtube": { "title": string, "description": string, "hashtags": [string, string, string] }
-      }
-    }
-  ]
-}
-
-Your VERY LAST message must be this JSON and nothing else. Do not say "Here are the ideas:" or wrap in \`\`\`.`;
+Your LAST message is this JSON only — no prose, no code fence.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -506,114 +419,72 @@ function instagramPrompt(
   const hasReviews = recentReviews.length > 0;
   return `You are an Instagram Reels content strategist. Produce exactly ${count} fresh Reels ideas as a JSON object.
 
-Today is ${today}.
-
-Available tools:
+Today is ${today}. Tools:
 ${describeInstagramAvailable()}
 ${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
 
-Required procedure:
-1. instagram_get_my_account — anchor what "my account" is. Note follower count, bio.
-2. instagram_list_my_media (limit 25) — recent posts/Reels. Note caption style, hashtag patterns, and which media got the most likes/comments relative to median.
-3. For the top 3-5 best-performing recent Reels, instagram_get_media_insights. Reach + saves + shares matter MORE than likes on IG. A Reel with high saves indicates a save-worthy concept.
-4. instagram_get_account_insights (days 30) — recent reach + profile-view trends. Are saves trending up or down?
-5. For the highest-engagement recent Reel, instagram_list_comments to surface what the audience is asking for.
+PROCEDURE
+1. instagram_get_my_account — anchor "my account". Note followers + bio.
+2. instagram_list_my_media (limit 25) — caption style, hashtag patterns, which media beat the median on likes/comments.
+3. For top 3-5 recent Reels, instagram_get_media_insights. Reach + saves + shares matter MORE than likes; high saves = save-worthy concept.
+4. instagram_get_account_insights (days 30) — reach + profile-view trends.
+5. For the highest-engagement recent Reel, instagram_list_comments for audience questions.
 
-Now produce exactly ${count} ideas, balanced across:
-- "pattern": extrapolates from one of the user's own top Reels. Cite the source media id + permalink in source_refs ({source_media_id: "...", permalink: "..."}).
-- "competitor": SKIP unless the recent post-mortems already cite a competitor. IG's API doesn't expose niche search without third-party tools. Lean harder on pattern + seasonal.
-- "trend": only if a clear pattern in the user's own recent insights shows a format gaining (e.g. carousel posts trending up vs single Reels). Cite the evidence.
-- "rising": SKIP unless the user's own engagement is clearly accelerating on a specific format. Keep to 0-1 per refresh.
-- "seasonal": calendar-anchored. Include hard_date (ISO 8601). Today is ${today}; only suggest hard_dates in the next 60 days.
+KINDS
+- pattern: source_refs={source_media_id, permalink}. Extrapolate from a top Reel.
+- competitor: SKIP unless a post-mortem above cites one (IG API has no niche search).
+- trend: only if user's own insights show a format clearly gaining (e.g. carousels up vs Reels). Cite the evidence.
+- rising: SKIP unless user's engagement clearly accelerating on a specific format. Max 0-1 per refresh.
+- seasonal: hard_date (ISO 8601), next 60 days only.
 
-Critical:
-- Every idea MUST be grounded in something you actually saw in a tool result. No invented stats, no invented competitors.
-- Each title must be specific and recordable.
-- hook must be the actual first 1-2s — both spoken AND the first on-screen text frame (IG users scroll on muted often, so on-screen text carries the hook).
-- format should be short ("save-worthy carousel cover", "before/after Reel with text overlay", "tutorial Reel").
-- rationale: 1-2 sentences citing specific evidence ("your top 3 Reels by saves all use the 'X mistake → fix' format; your 30d reach is up 15% on that format").${hasReviews ? `
-  WHEN A PRIOR POST-MORTEM ABOVE IS RELEVANT, cite it by title and verdict.` : ""}
-- saturation_warning (NULL or short string): only set if you saw clear saturation signals in the user's own recent insights.${hasReviews ? `
-- Post-mortems above are GROUND TRUTH. Steer toward formats that hit, away from those that underperformed.` : ""}
+RULES
+- Ground EVERY idea in a tool result — no invented stats or competitors.
+- title: specific + recordable.
+- hook: actual first 1-2s — both spoken AND first on-screen text frame (IG viewers scroll on mute).
+- format: short ("save-worthy carousel cover", "tutorial Reel").
+- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies, cite it by title + verdict.` : ""}
+- saturation_warning: only when user's own insights show saturation; else null.
 
-Upload-ready content for EVERY idea:
-
-- script: SHOOT-READY breakdown, labeled time-stamped blocks. Required blocks in order:
-
+SCRIPT (timestamps, all cues, max 90s — sweet spot 25-45s)
     [0:00-0:02] HOOK
       📢 SAY: "<exact words>"
-      🎬 ACTION: <on-camera action>
-      📺 ON-SCREEN TEXT: "<words on screen — IG viewers often scroll on mute>"
-      🎵 AUDIO: <music cue>
-
+      🎬 ACTION: <on-camera>
+      📺 ON-SCREEN TEXT: "<words>" (viewers scroll on mute — text carries the hook)
+      🎵 AUDIO: <cue>
     [0:02-0:10] BEAT 1 — Setup
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      📺 ON-SCREEN TEXT: "<...>"
+    [0:10-0:25] BEAT 2 — Payoff (include ✂️ CUT)
+    [0:25-0:35] BEAT 3 — Save-worthy moment (ON-SCREEN TEXT must summarise the takeaway in one screenshot-able frame)
+    [0:35-0:40] CTA — exact ask + ON-SCREEN TEXT ("SAVE FOR LATER" / "COMMENT YOUR PICK")
+HOOK ≤2s, CTA ≤5s. Match creator's voice from instagram_list_my_media.
 
-    [0:10-0:25] BEAT 2 — Payoff
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      ✂️ CUT: <transition>
+CAPTION
+- post_title: same as caption opener (≤125 chars — what survives feed truncation).
+- description: storytelling caption, 2-4 short paragraphs (line breaks). Under 500 chars unless format demands more. Ends with CTA. No inline hashtags.
+- hashtags: 3-8 strings, no leading '#'. Niche-focused — avoid generic mass tags (#love, #instagood). Mix niche + 1-2 trend tags you saw.
+- cta: one explicit ask. Algo weights SAVE > FOLLOW > COMMENT > LIKE, so prefer "Save this for next time you…" over "Like if you agree".
+- visual_notes: 4-6 bullets "• " (lighting, 9:16 framing, props, color grade).
 
-    [0:25-0:35] BEAT 3 — Save-worthy moment
-      📢 SAY: "<...>"
-      🎬 ACTION: <...>
-      📺 ON-SCREEN TEXT: "<one frame that summarises the takeaway — designed to be screenshot/saved>"
+VIRALITY
+- optimal_post_window: e.g. "Mon-Wed 6-8am or 7-9pm local" (derive from account insights when possible).
+- suggested_duration: seconds. Tutorial 25-45s, comparison/transformation 15-25s, storytelling 45-90s.
+- thumbnail_concept: ONE visual sentence — Reels cover shows in grid + Explore; design for thumbnail-size legibility.
+- engagement_hook: SPECIFIC SAVE-driver ("place the key takeaway as on-screen text in BEAT 3 so the frame is screenshot-able").
+- trending_sound: null. (IG API doesn't expose trending sounds.)
 
-    [0:35-0:40] CTA
-      📢 SAY: "<explicit ask>"
-      📺 ON-SCREEN TEXT: "<'SAVE FOR LATER' or 'COMMENT YOUR PICK'>"
+Return ONLY a JSON object {ideas:[...]} matching:
+{ "ideas":[{
+  "title":string, "hook":string, "format":string, "rationale":string,
+  "kind":"pattern"|"trend"|"rising"|"competitor"|"seasonal",
+  "source_refs":{...}, "hard_date":string, "saturation_warning":string|null,
+  "script":string, "post_title":string, "description":string,
+  "hashtags":[string], "cta":string, "visual_notes":string,
+  "optimal_post_window":string, "suggested_duration":string,
+  "thumbnail_concept":string, "engagement_hook":string,
+  "trending_sound":null,
+  "platforms":{ "instagram":{ "caption":string, "hashtags":[string] } }
+}] }
 
-    Reels max 90s for best reach; sweet spot 25-45s. HOOK ≤2s, CTA ≤5s. Match the creator's voice from instagram_list_my_media.
-
-- post_title: leave as the same value as the caption opener (≤125 chars) — IG doesn't have a separate title field. This first line is what survives truncation in the feed.
-- description: storytelling-style caption, 2-4 short paragraphs (line breaks between). Total under 500 chars unless the format genuinely benefits from longer. End with the CTA. Do NOT include hashtags here; they go in the hashtags field.
-- hashtags: 3-8 strings WITHOUT the leading '#'. Niche-focused — avoid generic mass tags (#love, #instagood) which IG's algo penalises. Mix specific niche tags with 1-2 trend tags if any are visible from your tool calls.
-- cta: one explicit ask. SAVE > FOLLOW > COMMENT > LIKE in algo weight on IG, so prefer "Save this for next time you…" over "Like if you agree".
-- visual_notes: 4-6 short bullets — lighting, framing (9:16 vertical), props, color grade. "• " prefix per bullet.
-
-Virality fields — fill ALL for every idea:
-
-- optimal_post_window: derived from instagram_get_account_insights when possible. IG generally favors weekday morning + evening windows for most niches. Format: "Mon-Wed 6-8am or 7-9pm local time".
-- suggested_duration: target length in seconds. Save-worthy tutorial Reels often work at 25-45s; comparison/transformation at 15-25s; storytelling at 45-90s.
-- thumbnail_concept: ONE sentence describing the cover. Reels cover shows in the grid + Explore — design it to read clearly at thumbnail size. Be visual.
-- engagement_hook: a SPECIFIC element designed to drive SAVES (highest algo weight). E.g. "Place the key takeaway as on-screen text in BEAT 3 so the frame is screenshot-able."
-- trending_sound: leave as null. IG's API doesn't expose trending sounds; the creator picks from in-app library. Set null.
-
-Return ONLY a JSON object {ideas: [...]} matching the schema below.
-
-JSON schema for the final response:
-{
-  "ideas": [
-    {
-      "title": string,
-      "hook": string,
-      "format": string,
-      "rationale": string,
-      "kind": "pattern" | "trend" | "rising" | "competitor" | "seasonal",
-      "source_refs": { ... },
-      "hard_date": string,
-      "saturation_warning": string | null,
-      "script": string,
-      "post_title": string,
-      "description": string,
-      "hashtags": [string, ...],
-      "cta": string,
-      "visual_notes": string,
-      "optimal_post_window": string,
-      "suggested_duration": string,
-      "thumbnail_concept": string,
-      "engagement_hook": string,
-      "trending_sound": null,
-      "platforms": {
-        "instagram": { "caption": string, "hashtags": [string, ...] }
-      }
-    }
-  ]
-}
-
-Your VERY LAST message must be this JSON and nothing else. Do not say "Here are the ideas:" or wrap in \`\`\`.`;
+Your LAST message is this JSON only — no prose, no code fence.`;
 }
 
 export async function runVideoIdeasAgent({
