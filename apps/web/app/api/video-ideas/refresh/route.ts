@@ -42,6 +42,47 @@ function humanizeStep(raw: string): string {
   return raw;
 }
 
+type RawPlatforms = {
+  tiktok?: { caption?: string | null; hashtags?: string[] | null } | null;
+  youtube?: {
+    title?: string | null;
+    description?: string | null;
+    hashtags?: string[] | null;
+  } | null;
+  instagram?: {
+    caption?: string | null;
+    hashtags?: string[] | null;
+  } | null;
+};
+
+function stripHash(h: string): string {
+  return h.replace(/^#/, "");
+}
+
+function normalizePlatforms(p: RawPlatforms): RawPlatforms {
+  const out: RawPlatforms = {};
+  if (p.tiktok?.caption) {
+    out.tiktok = {
+      caption: p.tiktok.caption,
+      hashtags: (p.tiktok.hashtags ?? []).map(stripHash),
+    };
+  }
+  if (p.youtube?.title) {
+    out.youtube = {
+      title: p.youtube.title,
+      description: p.youtube.description ?? "",
+      hashtags: (p.youtube.hashtags ?? []).map(stripHash),
+    };
+  }
+  if (p.instagram?.caption) {
+    out.instagram = {
+      caption: p.instagram.caption,
+      hashtags: (p.instagram.hashtags ?? []).map(stripHash),
+    };
+  }
+  return out;
+}
+
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const {
@@ -74,6 +115,27 @@ export async function POST(request: NextRequest) {
       { status: 404 },
     );
   }
+
+  // Which platforms is this user wired up to cross-post to? The agent
+  // generates one shared shoot + a caption package per platform, so the
+  // packaging only covers platforms the user can actually publish on.
+  // Source provider first so the agent treats it as the primary.
+  const LINKABLE_PROVIDERS = new Set(["tiktok", "youtube", "instagram"]);
+  const { data: linkRows } = await supabase
+    .from("integrations")
+    .select("provider")
+    .eq("user_id", user.id);
+  const platformSet = new Set<string>();
+  for (const r of linkRows ?? []) {
+    const p = r.provider as string;
+    if (LINKABLE_PROVIDERS.has(p)) platformSet.add(p);
+  }
+  const targetPlatforms: string[] = [];
+  if (platformSet.has(integration.provider)) {
+    targetPlatforms.push(integration.provider);
+    platformSet.delete(integration.provider);
+  }
+  for (const p of platformSet) targetPlatforms.push(p);
 
   // Don't kick off a duplicate if one is already in flight for this
   // account. Saves the user from accidentally running two generations
@@ -217,6 +279,7 @@ export async function POST(request: NextRequest) {
           userId: user.id,
           integrationId,
           count: deficit,
+          targetPlatforms,
           onStep: async ({ count, description }) => {
             const label = humanizeStep(description);
             send("step", { count, label });
@@ -256,6 +319,7 @@ export async function POST(request: NextRequest) {
           engagement_hook: idea.engagement_hook ?? null,
           trending_sound: idea.trending_sound ?? null,
           saturation_warning: idea.saturation_warning ?? null,
+          platforms: idea.platforms ? normalizePlatforms(idea.platforms) : null,
         }));
 
         if (rows.length > 0) {

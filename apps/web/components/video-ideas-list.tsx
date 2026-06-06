@@ -90,6 +90,15 @@ export type VideoIdeaRow = {
    *  than one platform (TikTok + YT Shorts + IG Reels). Empty array
    *  for ideas that haven't been marked posted yet. */
   posts?: PostedRow[];
+  /** Per-platform caption packaging produced by the generator. Only
+   *  the platforms the user has connected are populated; legacy ideas
+   *  pre-Phase-3 have this null and fall back to post_title /
+   *  description / hashtags. */
+  platforms?: {
+    tiktok?: { caption: string; hashtags: string[] };
+    youtube?: { title: string; description: string; hashtags: string[] };
+    instagram?: { caption: string; hashtags: string[] };
+  } | null;
 };
 
 export type PostedRow = {
@@ -1266,13 +1275,7 @@ function IdeaDetailModal({
   onSchedule: () => void;
   onDone: () => void;
 }) {
-  const captionWithTags = useMemo(() => {
-    const body = [idea.post_title, idea.description]
-      .filter((x) => !!x)
-      .join("\n\n");
-    const tags = (idea.hashtags ?? []).map((h) => `#${h}`).join(" ");
-    return [body, tags].filter(Boolean).join("\n\n").trim();
-  }, [idea]);
+  const captionTabs = useMemo(() => buildCaptionTabs(idea), [idea]);
 
   return (
     <Modal
@@ -1306,45 +1309,7 @@ function IdeaDetailModal({
           </Section>
         ) : null}
 
-        {(idea.post_title || idea.description) && (
-          <Section
-            title="Caption"
-            textToCopy={captionWithTags}
-            copyLabel="Copy caption + tags"
-          >
-            <div className="rounded-md bg-neutral-50 px-3 py-3 text-sm text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
-              {idea.post_title && (
-                <p className="font-medium">{idea.post_title}</p>
-              )}
-              {idea.description && (
-                <p className="mt-2 whitespace-pre-wrap">{idea.description}</p>
-              )}
-              {idea.hashtags && idea.hashtags.length > 0 && (
-                <p className="mt-3 text-blue-700 dark:text-blue-300">
-                  {idea.hashtags.map((h) => `#${h}`).join(" ")}
-                </p>
-              )}
-            </div>
-          </Section>
-        )}
-
-        {idea.hashtags && idea.hashtags.length > 0 && (
-          <Section
-            title="Hashtags"
-            textToCopy={idea.hashtags.map((h) => `#${h}`).join(" ")}
-          >
-            <div className="flex flex-wrap gap-1.5">
-              {idea.hashtags.map((h) => (
-                <span
-                  key={h}
-                  className="rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
-                >
-                  #{h}
-                </span>
-              ))}
-            </div>
-          </Section>
-        )}
+        {captionTabs.length > 0 && <CaptionTabs tabs={captionTabs} />}
 
         {idea.cta && (
           <Section title="Call to action" textToCopy={idea.cta}>
@@ -1436,6 +1401,130 @@ function IdeaDetailModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+type CaptionTab = {
+  platform: string; // "tiktok" | "youtube" | "instagram" | "generic"
+  label: string;
+  title: string | null; // YT-only normally
+  body: string | null;
+  hashtags: string[];
+  // What lands on the clipboard when "Copy caption + tags" is hit —
+  // pre-assembled per platform so the user can paste straight in.
+  combined: string;
+};
+
+function buildCaptionTabs(idea: VideoIdeaRow): CaptionTab[] {
+  const out: CaptionTab[] = [];
+  const p = idea.platforms ?? null;
+  if (p?.tiktok?.caption) {
+    const tags = (p.tiktok.hashtags ?? []).map((h) => `#${h}`).join(" ");
+    out.push({
+      platform: "tiktok",
+      label: "TikTok",
+      title: null,
+      body: p.tiktok.caption,
+      hashtags: p.tiktok.hashtags ?? [],
+      combined: [p.tiktok.caption, tags].filter(Boolean).join("\n\n").trim(),
+    });
+  }
+  if (p?.youtube?.title) {
+    const tags = (p.youtube.hashtags ?? []).map((h) => `#${h}`).join(" ");
+    out.push({
+      platform: "youtube",
+      label: "YouTube Shorts",
+      title: p.youtube.title,
+      body: p.youtube.description ?? null,
+      hashtags: p.youtube.hashtags ?? [],
+      combined: [p.youtube.title, p.youtube.description, tags]
+        .filter(Boolean)
+        .join("\n\n")
+        .trim(),
+    });
+  }
+  if (p?.instagram?.caption) {
+    const tags = (p.instagram.hashtags ?? []).map((h) => `#${h}`).join(" ");
+    out.push({
+      platform: "instagram",
+      label: "Instagram Reels",
+      title: null,
+      body: p.instagram.caption,
+      hashtags: p.instagram.hashtags ?? [],
+      combined: [p.instagram.caption, tags].filter(Boolean).join("\n\n").trim(),
+    });
+  }
+  // Legacy fallback: ideas generated before the platforms column
+  // existed get one generic tab assembled from post_title / description
+  // / hashtags so the modal isn't suddenly empty for them.
+  if (out.length === 0 && (idea.post_title || idea.description)) {
+    const tags = (idea.hashtags ?? []).map((h) => `#${h}`).join(" ");
+    const body = [idea.post_title, idea.description]
+      .filter((x) => !!x)
+      .join("\n\n");
+    out.push({
+      platform: "generic",
+      label: "Caption",
+      title: idea.post_title,
+      body: idea.description,
+      hashtags: idea.hashtags ?? [],
+      combined: [body, tags].filter(Boolean).join("\n\n").trim(),
+    });
+  }
+  return out;
+}
+
+function CaptionTabs({ tabs }: { tabs: CaptionTab[] }) {
+  const [active, setActive] = useState(0);
+  // If the tab set shrinks (e.g. user dismisses + new idea opens), keep
+  // active in bounds without forcing a clamp on every render.
+  const safeActive = Math.min(active, tabs.length - 1);
+  const tab = tabs[safeActive]!;
+  const showTabs = tabs.length > 1;
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+            Caption
+          </h3>
+          {showTabs && (
+            <div className="flex gap-1">
+              {tabs.map((t, i) => (
+                <button
+                  key={t.platform}
+                  type="button"
+                  onClick={() => setActive(i)}
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium transition ${
+                    i === safeActive
+                      ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                      : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <CopyButton text={tab.combined} label="Copy caption + tags" />
+      </div>
+      <div className="rounded-md bg-neutral-50 px-3 py-3 text-sm text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+        {tab.title && <p className="font-medium">{tab.title}</p>}
+        {tab.body && (
+          <p
+            className={`whitespace-pre-wrap ${tab.title ? "mt-2" : ""}`}
+          >
+            {tab.body}
+          </p>
+        )}
+        {tab.hashtags.length > 0 && (
+          <p className="mt-3 text-blue-700 dark:text-blue-300">
+            {tab.hashtags.map((h) => `#${h}`).join(" ")}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1780,7 +1869,12 @@ function IdeaCardBody({
   deletePosted: (id: string) => void;
 }) {
   const hasFullContent =
-    !!i.script || !!i.description || (i.hashtags?.length ?? 0) > 0;
+    !!i.script ||
+    !!i.description ||
+    (i.hashtags?.length ?? 0) > 0 ||
+    !!i.platforms?.tiktok ||
+    !!i.platforms?.youtube ||
+    !!i.platforms?.instagram;
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">

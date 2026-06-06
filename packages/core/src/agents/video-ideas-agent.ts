@@ -60,6 +60,16 @@ export type GeneratedIdea = {
   engagement_hook?: string;
   /** Trending TikTok sound to use, if one fits. */
   trending_sound?: string;
+  /** Per-platform caption packaging — only the platforms the creator
+   *  has connected get a variant. Shoot is shared (the script/hook/
+   *  visual_notes above); this is the metadata that goes around it. */
+  platforms?: PlatformPack;
+};
+
+export type PlatformPack = {
+  tiktok?: { caption: string; hashtags: string[] };
+  youtube?: { title: string; description: string; hashtags: string[] };
+  instagram?: { caption: string; hashtags: string[] };
 };
 
 export type VideoIdeasResult = {
@@ -89,6 +99,29 @@ const IDEA_SCHEMA = z.object({
   thumbnail_concept: z.string().nullish(),
   engagement_hook: z.string().nullish(),
   trending_sound: z.string().nullish(),
+  platforms: z
+    .object({
+      tiktok: z
+        .object({
+          caption: z.string(),
+          hashtags: z.array(z.string()),
+        })
+        .nullish(),
+      youtube: z
+        .object({
+          title: z.string(),
+          description: z.string(),
+          hashtags: z.array(z.string()),
+        })
+        .nullish(),
+      instagram: z
+        .object({
+          caption: z.string(),
+          hashtags: z.array(z.string()),
+        })
+        .nullish(),
+    })
+    .nullish(),
 });
 
 // Accept either { ideas: [...] } or a bare [...].
@@ -153,12 +186,31 @@ CREATOR PREFERENCES / HARD CONSTRAINTS (must respect for every idea — ideas th
 ${preferences.trim()}`;
 }
 
+const PLATFORM_GUIDANCE: Record<string, string> = {
+  tiktok:
+    "TikTok — caption is a short punchy line (≤150 chars), then 5-7 hashtags. The caption is just the headline; the script-derived spoken content carries the real message. Keep it conversational, end with a soft hook or question to drive comments.",
+  youtube:
+    "YouTube Shorts — needs its own title (≤100 chars, search-optimised — front-load the keyword phrase, no leading hashtag in title) AND a longer description (3-5 paragraphs, can repeat the spoken content for the YT search index, links/credits welcome). Hashtags 3-5 max — YT only surfaces the first 3 above the video, anything past 15 disables them all.",
+  instagram:
+    "Instagram Reels — caption is storytelling-style (2-4 short paragraphs, can be ~2200 chars max but most reels do 150-400 chars). Lead with a hook line that survives the truncation cutoff (~125 chars). Hashtags 3-8, niche-focused — IG's algo penalises generic mass tags like #love.",
+};
+
+function platformsBlock(targetPlatforms: string[]): string {
+  if (targetPlatforms.length === 0) return "";
+  const lines = targetPlatforms
+    .filter((p) => PLATFORM_GUIDANCE[p])
+    .map((p) => `  • ${PLATFORM_GUIDANCE[p]}`);
+  if (lines.length === 0) return "";
+  return `\n\nPER-PLATFORM PACKAGING — the creator will cross-post this same shoot to ${targetPlatforms.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" + ")}. For every idea, write a tailored caption package for EACH platform in the platforms object. The script and visuals are shared; only the metadata around the upload differs per platform:\n${lines.join("\n")}\n\nDo not just copy the same caption across platforms — each must respect its platform's norms. Hashtags can overlap but each platform's list should be hand-picked for its own discovery system.`;
+}
+
 function tiktokPrompt(
   count: number,
   today: string,
   connected: string[],
   recentReviews: RecentReview[] = [],
   preferences: string | null = null,
+  targetPlatforms: string[] = ["tiktok"],
 ): string {
   const hasApify = connected.includes("apify");
   const hasReviews = recentReviews.length > 0;
@@ -168,7 +220,7 @@ Today is ${today}.
 
 Available tools:
 ${describeAvailable(connected)}
-${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
+${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}${platformsBlock(targetPlatforms)}
 
 Required procedure:
 1. tiktok_top_my_videos (top_n 10, from_history 100) — these are the creator's lifetime best by engagement rate (likes ÷ views), pulled across their last ~100 uploads. This tells you what their audience actually rewards, not just what they posted recently.
@@ -274,7 +326,12 @@ JSON schema for the final response:
       "suggested_duration": string,  // "18-25s"
       "thumbnail_concept": string,
       "engagement_hook": string,
-      "trending_sound": string | null
+      "trending_sound": string | null,
+      "platforms": {                  // per-platform caption packaging; include ONLY the platforms listed in the PER-PLATFORM PACKAGING block above
+        "tiktok":    { "caption": string, "hashtags": [string, ...] },
+        "youtube":   { "title": string, "description": string, "hashtags": [string, ...] },
+        "instagram": { "caption": string, "hashtags": [string, ...] }
+      }
     }
   ]
 }
@@ -288,6 +345,7 @@ export async function runVideoIdeasAgent({
   integrationId,
   count,
   onStep,
+  targetPlatforms,
 }: {
   supabase: SupabaseClient;
   userId: string;
@@ -295,6 +353,10 @@ export async function runVideoIdeasAgent({
   integrationId: string;
   count: number;
   onStep?: (s: { count: number; description: string }) => Promise<void> | void;
+  /** Platforms to produce caption packages for. The source-integration
+   *  platform should be first. Defaults to ["tiktok"] for callers that
+   *  haven't been updated yet. */
+  targetPlatforms?: string[];
 }): Promise<VideoIdeasResult> {
   if (count <= 0) {
     return { ok: true, ideas: [] };
@@ -410,12 +472,17 @@ export async function runVideoIdeasAgent({
   }
 
   const today = new Date().toISOString().slice(0, 10);
+  const platforms =
+    targetPlatforms && targetPlatforms.length > 0
+      ? targetPlatforms
+      : ["tiktok"];
   const system = tiktokPrompt(
     count,
     today,
     connected,
     recentReviews,
     preferences,
+    platforms,
   );
 
   let stepCount = 0;
