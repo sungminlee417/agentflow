@@ -46,9 +46,15 @@ export function OAuthConnect({
 }) {
   const router = useRouter();
   const { confirm, dialog } = useConfirm();
+  // When the server has its own OAuth app configured via env vars,
+  // hide the BYO-credentials section by default — the typical user
+  // doesn't have a developer account on the platform and shouldn't
+  // need one. Power users can still expose it via "Advanced" below.
+  const usingSharedApp = credentialsSource === "env";
   const [showCredsForm, setShowCredsForm] = useState(
     !credentialsConfigured && !hasExistingAccounts,
   );
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [credStatus, setCredStatus] = useState<
@@ -142,7 +148,23 @@ export function OAuthConnect({
         </a>
       </div>
 
-      <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-800/60">
+      {/* When the server provides a shared OAuth app (env vars), the
+       *  BYO setup form is hidden behind an "Advanced" expander —
+       *  most users never need to touch it. Without env vars (local
+       *  dev), users must register their own to connect at all, so
+       *  the form auto-shows. */}
+      {usingSharedApp && !showAdvanced ? (
+        <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-800/60">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(true)}
+            className="text-[11px] text-neutral-500 transition hover:text-neutral-900 dark:hover:text-neutral-100"
+          >
+            Advanced: use your own {label} OAuth app
+          </button>
+        </div>
+      ) : (
+        <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-800/60">
         <div className="flex items-center justify-between gap-2 text-xs">
           <div className="text-neutral-500">
             <span className="font-medium">OAuth app:</span>{" "}
@@ -150,7 +172,7 @@ export function OAuthConnect({
               <span>
                 {credentialsSource === "user"
                   ? `your saved app${credentialsLast4 ? ` · ends in ${credentialsLast4}` : ""}`
-                  : "using server fallback (env vars)"}
+                  : "using AgentFlow's shared app"}
               </span>
             ) : (
               <span className="text-amber-600 dark:text-amber-400">
@@ -166,6 +188,18 @@ export function OAuthConnect({
                 className="text-neutral-500 transition hover:text-red-500 dark:hover:text-red-400"
               >
                 Remove
+              </button>
+            )}
+            {usingSharedApp && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAdvanced(false);
+                  setShowCredsForm(false);
+                }}
+                className="text-neutral-500 transition hover:text-neutral-900 dark:hover:text-neutral-100"
+              >
+                Hide
               </button>
             )}
             <button
@@ -236,7 +270,8 @@ export function OAuthConnect({
             )}
           </form>
         )}
-      </div>
+        </div>
+      )}
       {dialog}
     </div>
   );
