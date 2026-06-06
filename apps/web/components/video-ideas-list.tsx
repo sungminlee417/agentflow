@@ -212,6 +212,20 @@ function expiresLabel(iso: string): string {
   return `expires in ${hours}h`;
 }
 
+// Resolve a single ratio to show on the card / sort by, with the same
+// fallback rule as the verdict chip: idea.performance_stats only gets
+// populated by cross-platform synthesis; single-platform posts +
+// imports keep their stats on the post row. Without this fallback,
+// imported videos sort to the bottom of "best performing" even when
+// they're hits.
+function cardRatio(i: VideoIdeaRow): number | undefined {
+  if (i.performance_stats?.ratio != null) return i.performance_stats.ratio;
+  const reviewedPost = i.posts?.find(
+    (p) => p.performance_stats?.ratio != null,
+  );
+  return reviewedPost?.performance_stats?.ratio;
+}
+
 function isUrgent(iso: string): boolean {
   const ms = new Date(iso).getTime() - Date.now();
   return ms > 0 && ms < 3 * 86_400_000;
@@ -468,14 +482,12 @@ export function VideoIdeasList({
       });
     } else if (postedSort === "best") {
       sorted.sort(
-        (a, b) =>
-          (b.performance_stats?.ratio ?? -1) -
-          (a.performance_stats?.ratio ?? -1),
+        (a, b) => (cardRatio(b) ?? -1) - (cardRatio(a) ?? -1),
       );
     } else if (postedSort === "worst") {
       sorted.sort((a, b) => {
-        const ar = a.performance_stats?.ratio;
-        const br = b.performance_stats?.ratio;
+        const ar = cardRatio(a);
+        const br = cardRatio(b);
         if (ar == null && br == null) return 0;
         if (ar == null) return 1;
         if (br == null) return -1;
@@ -2317,8 +2329,16 @@ function CompactIdeaCard({
   account: IdeasAccount | null;
   onOpen: () => void;
 }) {
-  const verdict = i.performance_verdict;
-  const ratio = i.performance_stats?.ratio;
+  // Verdict resolution: idea.performance_verdict only gets populated
+  // when cross-platform synthesis fires (2+ posts settled). Single-
+  // platform posts + imported videos store their verdict on the
+  // video_idea_posts row instead. Fall back to the post-level verdict
+  // so a card that's actually been reviewed never shows "Review
+  // pending" just because synthesis hasn't run.
+  const reviewedPost = i.posts?.find((p) => !!p.performance_verdict);
+  const verdict = i.performance_verdict ?? reviewedPost?.performance_verdict ?? null;
+  const ratio =
+    i.performance_stats?.ratio ?? reviewedPost?.performance_stats?.ratio;
   const ready =
     !!i.script ||
     !!i.description ||
