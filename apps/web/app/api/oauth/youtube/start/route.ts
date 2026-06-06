@@ -38,7 +38,15 @@ export async function GET(request: NextRequest) {
   authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("scope", SCOPES.join(" "));
   authorizeUrl.searchParams.set("access_type", "offline");
-  authorizeUrl.searchParams.set("prompt", "consent");
+  // `select_account` forces Google to show the account picker even
+  // when the user is already signed in — required for multi-account
+  // YouTube support. Without it, the second "Connect YouTube" click
+  // silently picks the already-signed-in Google account, returns the
+  // same channel id, and the callback's upsert overwrites the
+  // existing integration row in place (looking like a swap to the
+  // user). `consent` is bundled so the offline refresh-token flow
+  // still triggers the consent screen each time.
+  authorizeUrl.searchParams.set("prompt", "select_account consent");
   authorizeUrl.searchParams.set("state", state);
 
   const response = NextResponse.redirect(authorizeUrl);

@@ -10,6 +10,7 @@ import {
   Image as ImageIcon,
   MessageCircle,
   Music,
+  Settings,
   Timer,
   type LucideIcon,
 } from "lucide-react";
@@ -269,6 +270,8 @@ export function VideoIdeasList({
     "pending",
   );
   const [filter, setFilter] = useState<KindFilter>("all");
+  const [filterAccountId, setFilterAccountId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [ideasSort, setIdeasSort] = useState<IdeasSort>("newest");
   const [postedSort, setPostedSort] = useState<PostedSort>("recent_post");
 
@@ -427,8 +430,13 @@ export function VideoIdeasList({
 
   const filtered = useMemo(() => {
     const base = baseForView(view);
+    const byAccount = filterAccountId
+      ? base.filter((i) => i.integration_id === filterAccountId)
+      : base;
     const byKind =
-      filter === "all" ? base : base.filter((i) => i.kind === filter);
+      filter === "all"
+        ? byAccount
+        : byAccount.filter((i) => i.kind === filter);
     if (view === "scheduled") return byKind;
     if (view === "pending") {
       if (ideasSort === "newest") return byKind;
@@ -473,7 +481,22 @@ export function VideoIdeasList({
       });
     }
     return sorted;
-  }, [view, baseForView, filter, ideasSort, postedSort]);
+  }, [view, baseForView, filter, ideasSort, postedSort, filterAccountId]);
+
+  // Per-account pending counts for the chip row. Reads from the
+  // active view's base so the badge reflects what's currently
+  // visible (e.g. when on Posted tab, the chip count is posted, not
+  // pending). Sums by integration_id so accounts with zero ideas
+  // still render with a 0.
+  const accountCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const g of groups) m.set(g.account.id, 0);
+    for (const i of baseForView(view)) {
+      if (!i.integration_id) continue;
+      m.set(i.integration_id, (m.get(i.integration_id) ?? 0) + 1);
+    }
+    return m;
+  }, [groups, baseForView, view]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {
@@ -830,12 +853,6 @@ export function VideoIdeasList({
           <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
             Video ideas
           </h1>
-          <span
-            className="text-xs text-neutral-500"
-            title={groups.map((g) => accountTitle(g.account)).join(", ")}
-          >
-            · {groups.length} account{groups.length === 1 ? "" : "s"}
-          </span>
           <Link
             href="/integrations"
             className="text-xs text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
@@ -843,17 +860,77 @@ export function VideoIdeasList({
             +
           </Link>
         </div>
-        <button
-          type="button"
-          onClick={refreshAll}
-          disabled={isRefreshing}
-          className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-        >
-          {isRefreshing
-            ? `Refreshing ${totalActive}/${groups.length}…`
-            : `Refresh all`}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            title="Per-account targets, preferences, and quick-add"
+            className="inline-flex items-center gap-1 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+          >
+            <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+            Settings
+          </button>
+          <button
+            type="button"
+            onClick={refreshAll}
+            disabled={isRefreshing}
+            className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+          >
+            {isRefreshing
+              ? `Refreshing ${totalActive}/${groups.length}…`
+              : `Refresh all`}
+          </button>
+        </div>
       </header>
+
+      {/* Account chips. Click one to scope the feed to a single
+       *  account; click again to clear. Counts reflect the active
+       *  view's bucket (Ideas / Working on / Posted). */}
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {groups.map((g) => {
+          const acct = g.account;
+          const count = accountCounts.get(acct.id) ?? 0;
+          const active = filterAccountId === acct.id;
+          const chipClass =
+            acct.provider === "tiktok"
+              ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
+              : acct.provider === "youtube"
+                ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200";
+          return (
+            <button
+              key={acct.id}
+              type="button"
+              onClick={() =>
+                setFilterAccountId(active ? null : acct.id)
+              }
+              title={accountTitle(acct)}
+              className={`group inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+                active
+                  ? "ring-2 ring-neutral-900 dark:ring-neutral-100"
+                  : "hover:brightness-95 dark:hover:brightness-110"
+              } ${chipClass}`}
+            >
+              <span className="font-semibold uppercase tracking-wide">
+                {PROVIDER_LABELS[acct.provider] ?? acct.provider}
+              </span>
+              <span className="opacity-75">{accountTitle(acct)}</span>
+              <span className="rounded-full bg-white/60 px-1.5 text-[10px] font-semibold tabular-nums text-neutral-900 dark:bg-black/30 dark:text-neutral-100">
+                {count}
+              </span>
+            </button>
+          );
+        })}
+        {filterAccountId && (
+          <button
+            type="button"
+            onClick={() => setFilterAccountId(null)}
+            className="rounded-full border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-900"
+          >
+            Clear filter
+          </button>
+        )}
+      </div>
 
       {isRefreshing && (
         <div className="mt-3 space-y-1 rounded-md border border-neutral-200 bg-neutral-50/60 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900/40">
@@ -1056,6 +1133,12 @@ export function VideoIdeasList({
         )}
       </section>
 
+      <AccountSettingsModal
+        open={settingsOpen}
+        groups={groups}
+        onClose={() => setSettingsOpen(false)}
+      />
+
       <MarkDoneModal
         open={markDoneIdeaId !== null}
         ideaId={markDoneIdeaId}
@@ -1110,6 +1193,128 @@ export function VideoIdeasList({
       )}
       {confirmDialog}
     </div>
+  );
+}
+
+// Per-account settings modal. One section per connected integration,
+// each with: target_count input (top up to N ideas), preferences
+// textarea (free-text guidance fed to the agent prompt), and a
+// quick-add input ("I have an idea: …"). Reuses the existing
+// AccountPreferences + QuickAddIdea components so behavior stays
+// consistent with what users saw on the per-account page pre-flat.
+function AccountSettingsModal({
+  open,
+  groups,
+  onClose,
+}: {
+  open: boolean;
+  groups: AccountGroup[];
+  onClose: () => void;
+}) {
+  // Local mirror of target_count per account, so the stepper feels
+  // snappy. Saves on blur / Enter.
+  const [targets, setTargets] = useState<Map<string, number>>(() => {
+    const m = new Map<string, number>();
+    for (const g of groups) m.set(g.account.id, g.targetCount);
+    return m;
+  });
+  useEffect(() => {
+    setTargets(() => {
+      const m = new Map<string, number>();
+      for (const g of groups) m.set(g.account.id, g.targetCount);
+      return m;
+    });
+  }, [groups]);
+
+  async function saveTarget(accountId: string, value: number) {
+    const clamped = Math.max(1, Math.min(50, Math.round(value)));
+    setTargets((prev) => {
+      const next = new Map(prev);
+      next.set(accountId, clamped);
+      return next;
+    });
+    await fetch("/api/video-ideas/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        integration_id: accountId,
+        target_count: clamped,
+      }),
+    });
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Settings"
+      subtitle="Per-account targets, preferences, and quick-add ideas"
+      maxWidth="max-w-2xl"
+    >
+      <div className="space-y-6">
+        {groups.map((g) => {
+          const acct = g.account;
+          const target = targets.get(acct.id) ?? g.targetCount;
+          const chipClass =
+            acct.provider === "tiktok"
+              ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
+              : acct.provider === "youtube"
+                ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200";
+          return (
+            <details
+              key={acct.id}
+              open={groups.length === 1}
+              className="rounded-lg border border-neutral-200 dark:border-neutral-800"
+            >
+              <summary className="flex cursor-pointer items-center gap-2 px-3 py-2.5 text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${chipClass}`}
+                >
+                  {PROVIDER_LABELS[acct.provider] ?? acct.provider}
+                </span>
+                <span className="truncate">{accountTitle(acct)}</span>
+              </summary>
+              <div className="space-y-4 border-t border-neutral-200 px-3 py-4 dark:border-neutral-800">
+                <div>
+                  <label className="flex items-center justify-between gap-3 text-xs">
+                    <span className="text-neutral-700 dark:text-neutral-300">
+                      Target ideas
+                      <span className="ml-1 text-neutral-500">
+                        — Refresh fills up to this many pending ideas
+                      </span>
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={target}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isFinite(n)) {
+                          setTargets((prev) => {
+                            const next = new Map(prev);
+                            next.set(acct.id, n);
+                            return next;
+                          });
+                        }
+                      }}
+                      onBlur={(e) => saveTarget(acct.id, Number(e.target.value))}
+                      className="w-16 rounded-md border border-neutral-300 bg-white px-2 py-1 text-right text-xs text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                    />
+                  </label>
+                </div>
+                <AccountPreferences
+                  selectedAccountId={acct.id}
+                  initial={g.preferences}
+                />
+                <QuickAddIdea selectedAccountId={acct.id} />
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </Modal>
   );
 }
 
