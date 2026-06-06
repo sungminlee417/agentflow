@@ -125,7 +125,14 @@ function median(nums: number[]): number {
     : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 }
 
+const PLATFORM_PROSE: Record<string, string> = {
+  tiktok: "TikTok",
+  youtube: "YouTube Shorts",
+  instagram: "Instagram Reels",
+};
+
 function buildPrompt(args: {
+  platform?: string;
   idea: {
     title: string;
     kind: string;
@@ -146,7 +153,8 @@ function buildPrompt(args: {
   ratio: number;
   verdict: ReviewVerdict;
 }): string {
-  return `You are a TikTok content analyst writing a SHORT post-mortem on a video the creator just posted.
+  const platformLabel = PLATFORM_PROSE[args.platform ?? "tiktok"] ?? "TikTok";
+  return `You are a ${platformLabel} content analyst writing a SHORT post-mortem on a video the creator just posted.
 
 THE IDEA THAT WAS PRODUCED:
 - Title: ${args.idea.title}
@@ -179,6 +187,456 @@ A single sentence stating the verdict and the ratio (e.g. "Hit — 2.1× your me
 - 3-5 short bullets. Each bullet is concrete enough to act on next time ("Keep the comparison hook — both 'hit' videos use it", not "make better content").
 
 Be honest. If it underperformed, name the likely reason. If it hit, name what specifically worked. Do not pad. Do not invent stats.`;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Per-platform stats fetchers. Each returns a normalised
+// PlatformStats shape so the verdict + LLM prompt machinery downstream
+// stays platform-agnostic.
+// ─────────────────────────────────────────────────────────────────────
+
+type PlatformStats = {
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+};
+
+async function fetchTikTokStats(
+  token: string,
+  videoId: string,
+): Promise<PlatformStats | null> {
+  const data = (await tt(token, "/video/query/", {
+    method: "POST",
+    query: { fields: TT_FIELDS },
+    body: { filters: { video_ids: [videoId] } },
+  })) as { data?: { videos?: TikTokVideo[] } };
+  const v = data.data?.videos?.[0];
+  if (!v) return null;
+  return {
+    views: v.view_count ?? 0,
+    likes: v.like_count ?? 0,
+    comments: v.comment_count ?? 0,
+    shares: v.share_count ?? 0,
+  };
+}
+
+async function fetchTikTokBaselineRates(token: string): Promise<number[]> {
+  try {
+    const data = (await tt(token, "/video/list/", {
+      method: "POST",
+      query: { fields: TT_FIELDS },
+      body: { max_count: 20 },
+    })) as { data?: { videos?: TikTokVideo[] } };
+    const VIEW_FLOOR = 50;
+    return (data.data?.videos ?? [])
+      .filter((v) => (v.view_count ?? 0) >= VIEW_FLOOR)
+      .map((v) => (v.like_count ?? 0) / Math.max(1, v.view_count ?? 1));
+  } catch {
+    return [];
+  }
+}
+
+// YouTube Data API v3 — videos.list with statistics + snippet.
+async function fetchYouTubeStats(
+  token: string,
+  videoId: string,
+): Promise<PlatformStats | null> {
+  const url = `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${encodeURIComponent(videoId)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`YouTube ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  const json = (await res.json()) as {
+    items?: Array<{
+      statistics?: {
+        viewCount?: string;
+        likeCount?: string;
+        commentCount?: string;
+      };
+    }>;
+  };
+  const stats = json.items?.[0]?.statistics;
+  if (!stats) return null;
+  return {
+    views: Number(stats.viewCount ?? 0),
+    likes: Number(stats.likeCount ?? 0),
+    comments: Number(stats.commentCount ?? 0),
+    // YouTube doesn't expose share count in Data API; left at 0.
+    shares: 0,
+  };
+}
+
+async function fetchYouTubeBaselineRates(token: string): Promise<number[]> {
+  try {
+    // search.list with forMine=true gets the authenticated user's
+    // most recent uploads. order=date, type=video. Then fetch the
+    // statistics block in a second call.
+    const searchUrl =
+      "https://www.googleapis.com/youtube/v3/search?part=id&forMine=true&type=video&order=date&maxResults=20";
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!searchRes.ok) return [];
+    const searchJson = (await searchRes.json()) as {
+      items?: Array<{ id?: { videoId?: string } }>;
+    };
+    const ids = (searchJson.items ?? [])
+      .map((i) => i.id?.videoId)
+      .filter((id): id is string => !!id);
+    if (ids.length === 0) return [];
+    const statsUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids.join(",")}`;
+    const statsRes = await fetch(statsUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!statsRes.ok) return [];
+    const statsJson = (await statsRes.json()) as {
+      items?: Array<{
+        statistics?: { viewCount?: string; likeCount?: string };
+      }>;
+    };
+    const VIEW_FLOOR = 50;
+    return (statsJson.items ?? [])
+      .map((item) => ({
+        views: Number(item.statistics?.viewCount ?? 0),
+        likes: Number(item.statistics?.likeCount ?? 0),
+      }))
+      .filter((r) => r.views >= VIEW_FLOOR)
+      .map((r) => r.likes / Math.max(1, r.views));
+  } catch {
+    return [];
+  }
+}
+
+// Instagram Graph API. Caller passes the shortcode from the URL; we
+// resolve it to a media id via /me/media (Instagram doesn't expose
+// shortcode → id directly).
+async function fetchInstagramMediaIdByShortcode(
+  token: string,
+  shortcode: string,
+): Promise<string | null> {
+  const url = `https://graph.instagram.com/me/media?fields=id,shortcode&access_token=${encodeURIComponent(token)}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const json = (await res.json()) as {
+    data?: Array<{ id?: string; shortcode?: string }>;
+  };
+  const hit = (json.data ?? []).find((m) => m.shortcode === shortcode);
+  return hit?.id ?? null;
+}
+
+async function fetchInstagramStats(
+  token: string,
+  shortcodeOrId: string,
+): Promise<PlatformStats | null> {
+  let mediaId = shortcodeOrId;
+  // If it looks like a shortcode (non-numeric), resolve it.
+  if (!/^\d+$/.test(shortcodeOrId)) {
+    const resolved = await fetchInstagramMediaIdByShortcode(
+      token,
+      shortcodeOrId,
+    );
+    if (!resolved) return null;
+    mediaId = resolved;
+  }
+  const url = `https://graph.instagram.com/${mediaId}?fields=like_count,comments_count,media_type&access_token=${encodeURIComponent(token)}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const base = (await res.json()) as {
+    like_count?: number;
+    comments_count?: number;
+    media_type?: string;
+  };
+  // Reach/impressions live behind /insights for business accounts.
+  let views = 0;
+  let shares = 0;
+  try {
+    const insightsUrl = `https://graph.instagram.com/${mediaId}/insights?metric=reach,shares&access_token=${encodeURIComponent(token)}`;
+    const insightsRes = await fetch(insightsUrl);
+    if (insightsRes.ok) {
+      const ij = (await insightsRes.json()) as {
+        data?: Array<{ name?: string; values?: Array<{ value?: number }> }>;
+      };
+      for (const m of ij.data ?? []) {
+        const v = m.values?.[0]?.value ?? 0;
+        if (m.name === "reach") views = v;
+        if (m.name === "shares") shares = v;
+      }
+    }
+  } catch {
+    // Insights are optional; we fall back to 0.
+  }
+  return {
+    views,
+    likes: base.like_count ?? 0,
+    comments: base.comments_count ?? 0,
+    shares,
+  };
+}
+
+async function fetchInstagramBaselineRates(token: string): Promise<number[]> {
+  try {
+    const url = `https://graph.instagram.com/me/media?fields=id,media_type&limit=20&access_token=${encodeURIComponent(token)}`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      data?: Array<{ id?: string }>;
+    };
+    const ids = (json.data ?? [])
+      .map((m) => m.id)
+      .filter((id): id is string => !!id);
+    const rates: number[] = [];
+    for (const id of ids) {
+      try {
+        const detailUrl = `https://graph.instagram.com/${id}?fields=like_count,comments_count&access_token=${encodeURIComponent(token)}`;
+        const detailRes = await fetch(detailUrl);
+        if (!detailRes.ok) continue;
+        const d = (await detailRes.json()) as {
+          like_count?: number;
+          comments_count?: number;
+        };
+        const insightsUrl = `https://graph.instagram.com/${id}/insights?metric=reach&access_token=${encodeURIComponent(token)}`;
+        const insightsRes = await fetch(insightsUrl);
+        let reach = 0;
+        if (insightsRes.ok) {
+          const ij = (await insightsRes.json()) as {
+            data?: Array<{ name?: string; values?: Array<{ value?: number }> }>;
+          };
+          reach =
+            ij.data?.find((m) => m.name === "reach")?.values?.[0]?.value ?? 0;
+        }
+        const VIEW_FLOOR = 50;
+        if (reach >= VIEW_FLOOR) {
+          rates.push((d.like_count ?? 0) / Math.max(1, reach));
+        }
+      } catch {
+        // Individual misses don't sink the whole baseline.
+      }
+    }
+    return rates;
+  } catch {
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Per-platform-post review. New entry point for the multi-platform
+// post model — operates on a video_idea_posts row.
+// ─────────────────────────────────────────────────────────────────────
+
+export async function runPostReview({
+  supabase,
+  userId,
+  postId,
+  now = new Date(),
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  postId: string;
+  now?: Date;
+}): Promise<ReviewResult> {
+  // 1. Load the post row + the parent idea.
+  const { data: post } = await supabase
+    .from("video_idea_posts")
+    .select(
+      "id, idea_id, integration_id, platform, posted_video_id, posted_at",
+    )
+    .eq("user_id", userId)
+    .eq("id", postId)
+    .maybeSingle();
+  if (!post) return { ok: false, error: "Post not found." };
+
+  const { data: idea } = await supabase
+    .from("video_ideas")
+    .select("title, kind, format, hook, rationale, hashtags")
+    .eq("user_id", userId)
+    .eq("id", post.idea_id)
+    .maybeSingle();
+  if (!idea) return { ok: false, error: "Parent idea not found." };
+
+  // 2. Load the integration + fresh token.
+  const { data: integration } = await supabase
+    .from("integrations")
+    .select(
+      "id, provider, encrypted_access_token, encrypted_refresh_token, expires_at",
+    )
+    .eq("user_id", userId)
+    .eq("id", post.integration_id)
+    .maybeSingle();
+  if (!integration) return { ok: false, error: "Integration not found." };
+  if (!integration.encrypted_access_token) {
+    return { ok: false, error: "No access token stored." };
+  }
+
+  let token: string;
+  try {
+    token = await getFreshAccessToken(
+      supabase,
+      userId,
+      integration.provider as "tiktok" | "youtube" | "instagram",
+      {
+        id: integration.id as string,
+        encrypted_access_token: integration.encrypted_access_token,
+        encrypted_refresh_token: integration.encrypted_refresh_token,
+        expires_at: integration.expires_at,
+      },
+    );
+  } catch {
+    token = decrypt(integration.encrypted_access_token);
+  }
+
+  // 3. Pull stats + baseline by platform.
+  const platform = post.platform as string;
+  let stats: PlatformStats | null = null;
+  let baselineRates: number[] = [];
+  try {
+    if (platform === "tiktok") {
+      stats = await fetchTikTokStats(token, post.posted_video_id as string);
+      baselineRates = await fetchTikTokBaselineRates(token);
+    } else if (platform === "youtube") {
+      stats = await fetchYouTubeStats(token, post.posted_video_id as string);
+      baselineRates = await fetchYouTubeBaselineRates(token);
+    } else if (platform === "instagram") {
+      stats = await fetchInstagramStats(
+        token,
+        post.posted_video_id as string,
+      );
+      baselineRates = await fetchInstagramBaselineRates(token);
+    } else {
+      return { ok: false, error: `Unsupported platform: ${platform}` };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${platform} stats fetch failed: ${err instanceof Error ? err.message : "unknown"}`,
+    };
+  }
+  if (!stats) {
+    return { ok: false, error: `${platform} returned no data for this post.` };
+  }
+
+  const baselineMedianRate = median(baselineRates);
+  const views = stats.views;
+  const likes = stats.likes;
+  const comments = stats.comments;
+  const shares = stats.shares;
+  const engagementRate = views > 0 ? likes / views : 0;
+  const ratio =
+    baselineMedianRate > 0 ? engagementRate / baselineMedianRate : 0;
+
+  const postedAt = new Date(post.posted_at as string);
+  const hoursSincePosted = (now.getTime() - postedAt.getTime()) / 3_600_000;
+  const verdict = pickVerdict(ratio, hoursSincePosted);
+  const nextReviewAt = pickNextReviewAt(postedAt, now);
+
+  // 4. LLM prose post-mortem.
+  const { data: keys } = await supabase
+    .from("user_api_keys")
+    .select("provider, encrypted_key, model")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (!keys || keys.length === 0) {
+    return { ok: false, error: "No AI provider key configured." };
+  }
+  const { provider, encrypted_key, model: userModel } = keys[0]!;
+  if (!isProvider(provider)) {
+    return { ok: false, error: `Unknown AI provider: ${provider}` };
+  }
+  let apiKey: string;
+  try {
+    apiKey = decrypt(encrypted_key);
+  } catch {
+    return { ok: false, error: "Could not decrypt AI provider key." };
+  }
+
+  let reviewText = "";
+  try {
+    const result = await generateText({
+      model: getModel(provider, apiKey, userModel),
+      system: buildPrompt({
+        platform,
+        idea: {
+          title: idea.title as string,
+          kind: idea.kind as string,
+          format: idea.format as string | null,
+          hook: idea.hook as string | null,
+          rationale: idea.rationale as string | null,
+          hashtags: (idea.hashtags as string[] | null) ?? [],
+        },
+        posted: {
+          views,
+          likes,
+          comments,
+          shares,
+          engagement_rate: engagementRate,
+          hours_since_posted: hoursSincePosted,
+        },
+        baseline_median_rate: baselineMedianRate,
+        ratio,
+        verdict,
+      }),
+      messages: [
+        {
+          role: "user",
+          content:
+            "Write the post-mortem now. Return only the markdown — no preamble.",
+        },
+      ],
+    });
+    reviewText = result.text.trim();
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Model call failed: ${err instanceof Error ? err.message : "unknown"}`,
+    };
+  }
+
+  return {
+    ok: true,
+    verdict,
+    score: engagementRate,
+    review: reviewText,
+    stats: {
+      views,
+      likes,
+      comments,
+      shares,
+      engagement_rate: engagementRate,
+      baseline_median_rate: baselineMedianRate,
+      ratio,
+      hours_since_posted: hoursSincePosted,
+    },
+    next_review_at: nextReviewAt,
+  };
+}
+
+// Persist a per-post review result.
+export async function savePostReview(
+  supabase: SupabaseClient,
+  userId: string,
+  postId: string,
+  result: ReviewResult,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!result.ok) return { ok: false, error: result.error };
+  const { error } = await supabase
+    .from("video_idea_posts")
+    .update({
+      performance_verdict: result.verdict ?? null,
+      performance_score: result.score ?? null,
+      performance_review: result.review ?? null,
+      performance_stats: result.stats ?? null,
+      last_reviewed_at: new Date().toISOString(),
+      next_review_at: result.next_review_at
+        ? result.next_review_at.toISOString()
+        : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId)
+    .eq("id", postId);
+  return { ok: !error, error: error?.message };
 }
 
 export async function runVideoReview({

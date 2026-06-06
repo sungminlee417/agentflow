@@ -558,13 +558,16 @@ export function VideoIdeasList({
     }
   }
 
-  async function runReviewNow(id: string) {
-    setReviewingId(id);
+  async function runReviewNow(id: string, postId?: string) {
+    // Per-post review uses post.id as the busy key so each platform
+    // row's spinner is independent. Whole-idea review uses idea.id.
+    setReviewingId(postId ?? id);
     setError(null);
     try {
-      const res = await fetch(`/api/video-ideas/${id}/review`, {
-        method: "POST",
-      });
+      const url = postId
+        ? `/api/video-ideas/${id}/review?post_id=${encodeURIComponent(postId)}`
+        : `/api/video-ideas/${id}/review`;
+      const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const text = await res.text();
         setError(`Review failed: ${text.slice(0, 200)}`);
@@ -1526,12 +1529,12 @@ const PLATFORM_LABELS: Record<string, string> = {
 
 function PerformanceBlock({
   i,
-  reviewing,
+  reviewingId,
   onReview,
 }: {
   i: VideoIdeaRow;
-  reviewing: boolean;
-  onReview: () => void;
+  reviewingId: string | null;
+  onReview: (postId?: string) => void;
 }) {
   // Prefer the new per-platform posts list; fall back to the
   // denormalised single-post columns on the idea row for ideas that
@@ -1544,13 +1547,15 @@ function PerformanceBlock({
           <PostPerfRow
             key={p.id}
             post={p}
-            reviewing={reviewing}
-            onReview={onReview}
+            reviewing={reviewingId === p.id}
+            onReview={() => onReview(p.id)}
           />
         ))}
       </div>
     );
   }
+
+  const reviewing = reviewingId === i.id;
 
   // Legacy single-post render — preserved for backward compat. Once
   // the migration backfills every idea, this branch becomes dead
@@ -1626,7 +1631,7 @@ function PerformanceBlock({
         <div className="mt-2">
           <button
             type="button"
-            onClick={onReview}
+            onClick={() => onReview()}
             disabled={reviewing}
             className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-[11px] text-neutral-700 transition hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900"
           >
@@ -1767,7 +1772,7 @@ function IdeaCardBody({
 }: {
   i: VideoIdeaRow;
   reviewingId: string | null;
-  runReviewNow: (id: string) => void;
+  runReviewNow: (id: string, postId?: string) => void;
   setDetailIdeaId: (id: string) => void;
   setStatus: (id: string, status: VideoIdeaRow["status"]) => void;
   setMarkDoneIdeaId: (id: string) => void;
@@ -1841,8 +1846,8 @@ function IdeaCardBody({
       {i.status === "done" && (
         <PerformanceBlock
           i={i}
-          reviewing={reviewingId === i.id}
-          onReview={() => runReviewNow(i.id)}
+          reviewingId={reviewingId}
+          onReview={(postId) => runReviewNow(i.id, postId)}
         />
       )}
       <div className="mt-3 flex flex-wrap gap-2">

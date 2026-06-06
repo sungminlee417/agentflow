@@ -3,7 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 import {
   decrypt,
   runIssueAgent,
+  runPostReview,
   runVideoReview,
+  savePostReview,
   saveReview,
 } from "@agentflow/core";
 
@@ -195,6 +197,86 @@ async function processAutomation(a: Automation): Promise<void> {
 // agent itself decides whether to schedule another review (it does
 // for the +48h pass, stops after +7d).
 async function processDueReviews(): Promise<void> {
+  // Two queues to drain on each tick:
+  //   1. New per-platform post reviews (video_idea_posts) — the
+  //      primary path post-multi-platform migration.
+  //   2. Legacy single-post reviews (video_ideas) — still polled so
+  //      ideas that pre-date the migration or were linked via the
+  //      legacy code path get reviewed.
+  await Promise.all([processDuePostReviews(), processDueLegacyReviews()]);
+}
+
+async function processDuePostReviews(): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const { data: due, error } = await supabase
+    .from("video_idea_posts")
+    .select("id, user_id, platform")
+    .not("next_review_at", "is", null)
+    .lt("next_review_at", nowIso)
+    .limit(20);
+  if (error) {
+    console.error(`[worker] load due post reviews failed:`, error);
+    return;
+  }
+  if (!due || due.length === 0) return;
+
+  for (let i = 0; i < due.length; i += MAX_CONCURRENT_PER_TICK) {
+    const batch = due.slice(i, i + MAX_CONCURRENT_PER_TICK);
+    await Promise.all(
+      batch.map(async (row) => {
+        const userId = row.user_id as string;
+        const postId = row.id as string;
+        const platform = row.platform as string;
+        try {
+          console.log(
+            `[worker] reviewing ${platform} post ${postId} for user ${userId}`,
+          );
+          const result = await runPostReview({
+            supabase,
+            userId,
+            postId,
+          });
+          if (!result.ok) {
+            console.warn(
+              `[worker] post review ${postId} failed: ${result.error}; backing off 24h`,
+            );
+            await supabase
+              .from("video_idea_posts")
+              .update({
+                next_review_at: new Date(
+                  Date.now() + 24 * 60 * 60 * 1000,
+                ).toISOString(),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("user_id", userId)
+              .eq("id", postId);
+            return;
+          }
+          const saved = await savePostReview(
+            supabase,
+            userId,
+            postId,
+            result,
+          );
+          if (!saved.ok) {
+            console.error(
+              `[worker] savePostReview ${postId} failed:`,
+              saved.error,
+            );
+          } else {
+            console.log(
+              `[worker] reviewed ${platform} post ${postId} → verdict=${result.verdict} ratio=${result.stats?.ratio.toFixed(2)}`,
+            );
+          }
+        } catch (err) {
+          console.error(`[worker] post review ${postId} crashed:`, err);
+        }
+      }),
+    );
+  }
+}
+
+async function processDueLegacyReviews(): Promise<void> {
   const nowIso = new Date().toISOString();
   const { data: due, error } = await supabase
     .from("video_ideas")
@@ -205,7 +287,7 @@ async function processDueReviews(): Promise<void> {
     .lt("next_review_at", nowIso)
     .limit(20);
   if (error) {
-    console.error(`[worker] load due reviews failed:`, error);
+    console.error(`[worker] load due legacy reviews failed:`, error);
     return;
   }
   if (!due || due.length === 0) return;
@@ -217,7 +299,9 @@ async function processDueReviews(): Promise<void> {
         const userId = row.user_id as string;
         const ideaId = row.id as string;
         try {
-          console.log(`[worker] reviewing idea ${ideaId} for user ${userId}`);
+          console.log(
+            `[worker] reviewing legacy idea ${ideaId} for user ${userId}`,
+          );
           const result = await runVideoReview({
             supabase,
             userId,
@@ -225,10 +309,8 @@ async function processDueReviews(): Promise<void> {
           });
           if (!result.ok) {
             console.warn(
-              `[worker] review ${ideaId} failed: ${result.error}; backing off 24h`,
+              `[worker] legacy review ${ideaId} failed: ${result.error}; backing off 24h`,
             );
-            // Avoid hammering on persistent failures (e.g. token
-            // permanently revoked). Push next attempt out 24h.
             await supabase
               .from("video_ideas")
               .update({
@@ -242,14 +324,17 @@ async function processDueReviews(): Promise<void> {
           }
           const saved = await saveReview(supabase, userId, ideaId, result);
           if (!saved.ok) {
-            console.error(`[worker] saveReview ${ideaId} failed:`, saved.error);
+            console.error(
+              `[worker] saveReview ${ideaId} failed:`,
+              saved.error,
+            );
           } else {
             console.log(
-              `[worker] reviewed ${ideaId} → verdict=${result.verdict} ratio=${result.stats?.ratio.toFixed(2)}`,
+              `[worker] reviewed legacy ${ideaId} → verdict=${result.verdict} ratio=${result.stats?.ratio.toFixed(2)}`,
             );
           }
         } catch (err) {
-          console.error(`[worker] review ${ideaId} crashed:`, err);
+          console.error(`[worker] legacy review ${ideaId} crashed:`, err);
         }
       }),
     );
