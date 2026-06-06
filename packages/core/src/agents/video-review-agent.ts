@@ -422,6 +422,111 @@ async function fetchInstagramBaselineRates(token: string): Promise<number[]> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Video metadata fetchers — used by the "import existing video" flow
+// to populate a synthetic video_ideas row's title + posted_at from
+// the platform itself, given just a URL + access token.
+// ─────────────────────────────────────────────────────────────────────
+
+export type ImportedVideoMetadata = {
+  videoId: string;
+  title: string | null;
+  postedAt: string; // ISO 8601
+  url: string | null;
+};
+
+async function fetchTikTokVideoMeta(
+  token: string,
+  videoId: string,
+): Promise<ImportedVideoMetadata | null> {
+  const data = (await tt(token, "/video/query/", {
+    method: "POST",
+    query: { fields: TT_FIELDS },
+    body: { filters: { video_ids: [videoId] } },
+  })) as { data?: { videos?: TikTokVideo[] } };
+  const v = data.data?.videos?.[0];
+  if (!v) return null;
+  return {
+    videoId,
+    title: v.title ?? v.video_description ?? null,
+    postedAt: v.create_time
+      ? new Date(v.create_time * 1000).toISOString()
+      : new Date().toISOString(),
+    url: null,
+  };
+}
+
+async function fetchYouTubeVideoMeta(
+  token: string,
+  videoId: string,
+): Promise<ImportedVideoMetadata | null> {
+  const res = await fetch(
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) return null;
+  const json = (await res.json()) as {
+    items?: Array<{
+      id: string;
+      snippet?: { title?: string; publishedAt?: string };
+    }>;
+  };
+  const v = json.items?.[0];
+  if (!v) return null;
+  return {
+    videoId: v.id,
+    title: v.snippet?.title ?? null,
+    postedAt: v.snippet?.publishedAt ?? new Date().toISOString(),
+    url: `https://www.youtube.com/watch?v=${v.id}`,
+  };
+}
+
+async function fetchInstagramVideoMeta(
+  token: string,
+  shortcode: string,
+): Promise<ImportedVideoMetadata | null> {
+  const mediaId = await fetchInstagramMediaIdByShortcode(token, shortcode);
+  if (!mediaId) return null;
+  const res = await fetch(
+    `https://graph.instagram.com/${mediaId}?fields=caption,timestamp,permalink&access_token=${encodeURIComponent(token)}`,
+  );
+  if (!res.ok) return null;
+  const json = (await res.json()) as {
+    caption?: string;
+    timestamp?: string;
+    permalink?: string;
+  };
+  // IG has no separate title field — first ~80 chars of the caption is
+  // the closest equivalent the user would recognise as a "title".
+  const title = json.caption
+    ? json.caption.split("\n")[0]!.slice(0, 80)
+    : null;
+  return {
+    videoId: shortcode, // keep the shortcode as the canonical id we store
+    title,
+    postedAt: json.timestamp ?? new Date().toISOString(),
+    url: json.permalink ?? null,
+  };
+}
+
+// Public dispatcher: given a platform + access token + the URL/id the
+// user pasted, returns the video's title + posted_at + canonical id.
+// Returns null when the platform can't find the video (most often
+// because the URL points to a video that doesn't belong to this
+// integration's account — e.g. someone else's TikTok).
+export async function fetchImportedVideoMetadata(
+  platform: string,
+  token: string,
+  urlOrId: string,
+): Promise<ImportedVideoMetadata | null> {
+  const id = extractPostedVideoId(platform, urlOrId);
+  if (!id) return null;
+  if (platform === "tiktok") return fetchTikTokVideoMeta(token, id);
+  if (platform === "youtube") return fetchYouTubeVideoMeta(token, id);
+  if (platform === "instagram") return fetchInstagramVideoMeta(token, id);
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Per-platform-post review. New entry point for the multi-platform
 // post model — operates on a video_idea_posts row.
 // ─────────────────────────────────────────────────────────────────────
