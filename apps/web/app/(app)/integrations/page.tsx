@@ -113,7 +113,6 @@ export default async function IntegrationsPage({
 
   const [
     { data: integrations },
-    { data: oauthCreds },
     { data: uploads },
     { data: serviceKeys },
   ] = await Promise.all([
@@ -123,9 +122,6 @@ export default async function IntegrationsPage({
         "id, provider, scopes, handle, display_name, account_label, provider_account_id, created_at",
       )
       .order("created_at", { ascending: true }),
-    supabase
-      .from("user_oauth_credentials")
-      .select("provider, client_id_last4"),
     supabase
       .from("creator_analytics_uploads")
       .select("id, provider, label, filename, content_type, size_bytes, created_at")
@@ -148,11 +144,6 @@ export default async function IntegrationsPage({
     integrationsByProvider.set(i.provider as string, list);
   }
 
-  const credsByProvider = new Map(
-    (oauthCreds ?? []).map(
-      (c) => [c.provider as string, c.client_id_last4 as string],
-    ),
-  );
   const uploadsByProvider = new Map<string, UploadRow[]>();
   for (const u of (uploads ?? []) as UploadRow[]) {
     const list = uploadsByProvider.get(u.provider) ?? [];
@@ -206,7 +197,7 @@ export default async function IntegrationsPage({
       hint: hintFor(p, origin),
       accounts,
       credentialsConfigured: !!source,
-      credentialsLast4: credsByProvider.get(p.provider) ?? null,
+      credentialsLast4: null,
       credentialsSource: source,
       uploads: uploadsByProvider.get(p.provider) ?? [],
       uploadHint: p.uploadHint,
