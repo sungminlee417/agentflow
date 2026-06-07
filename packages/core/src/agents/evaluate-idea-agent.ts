@@ -132,6 +132,7 @@ function reviewsBlockForEvaluator(reviews: EvalReview[]): string {
 function buildPrompt(args: {
   rawIdea: string;
   today: string;
+  platform: "tiktok" | "youtube" | "instagram";
   hasApify: boolean;
   preferences: string | null;
   reviews: EvalReview[];
@@ -144,20 +145,36 @@ CREATOR PREFERENCES / HARD CONSTRAINTS (an idea that violates any of these is an
 ${args.preferences.trim()}`
       : "";
 
+  // Platform-specific research procedure. Same shape, swap the tool
+  // names. The agent's job (harsh-but-helpful evaluation) is identical
+  // across platforms.
+  const procedure =
+    args.platform === "youtube"
+      ? `1. youtube_list_my_videos (limit 25) — sort by viewCount to see what hits for this channel, note current voice + title patterns.
+2. youtube_search_niche on the creator's core topic (order=viewCount, published_after_days=30) to see what's currently surging.
+3. For 1-2 high-view examples in step 2, youtube_get_video_comments to surface audience sentiment.
+4. Compare the spark against what works for this creator's audience. Be SPECIFIC about why it does or doesn't fit.`
+      : args.platform === "instagram"
+        ? `1. instagram_list_my_media (limit 25) — caption style, hashtag patterns, top performers by saves/likes.
+2. For the top 3-5 recent Reels, instagram_get_media_insights — reach + saves + shares matter more than likes.
+${args.hasApify ? `3. instagram_search_hashtag on the creator's primary niche hashtag (limit 20) to see what's working in the space right now.` : "3. (Apify not configured — judge from the creator's own data only; you cannot label something 'rising' without velocity evidence.)"}
+4. Compare the spark against what works for this creator's audience. Be SPECIFIC about why it does or doesn't fit.`
+        : `1. tiktok_top_my_videos (top_n 10, from_history 100) — what hits for this creator.
+2. tiktok_list_my_videos (max_count 20) — current voice.
+3. ${args.hasApify ? `tiktok_search_hashtag on the creator's primary niche hashtag (limit 20) to see what's working in the space right now.
+   • Velocity check: group results by week using create_time. If the past 3-7 days' top videos have notably higher engagement than the prior week, the format/topic is RISING — consider labeling kind="rising" with a velocity_note in source_refs.
+   • Saturation check: if 15+ recent videos in the niche use the same format as the spark with below-niche-median engagement, the topic is saturated — note this and either reframe (needs_work) or pass.` : "(Apify not configured — judge from the creator's own data only; you cannot label something 'rising' without velocity evidence.)"}
+4. Compare the spark against what works for this creator's audience. Be SPECIFIC about why it does or doesn't fit.`;
+
   return `You evaluate raw video-idea sparks the creator types in, and decide whether they fit. Your job is harsh-but-helpful filtering: most ideas should NOT make it into the library; only ones the creator's audience would actually reward should.
 
-Today is ${args.today}.
+Today is ${args.today}. The creator's account is on ${args.platform === "tiktok" ? "TikTok" : args.platform === "youtube" ? "YouTube" : "Instagram"} — evaluate fit for that platform specifically.
 
 User's raw idea spark:
 "${args.rawIdea}"${prefBlock}${reviewsBlockForEvaluator(args.reviews)}
 
 Required procedure:
-1. tiktok_top_my_videos (top_n 10, from_history 100) — what hits for this creator.
-2. tiktok_list_my_videos (max_count 20) — current voice.
-3. ${args.hasApify ? `tiktok_search_hashtag on the creator's primary niche hashtag (limit 20) to see what's working in the space right now.
-   • Velocity check: group results by week using create_time. If the past 3-7 days' top videos have notably higher engagement than the prior week, the format/topic is RISING — consider labeling kind="rising" with a velocity_note in source_refs.
-   • Saturation check: if 15+ recent videos in the niche use the same format as the spark with below-niche-median engagement, the topic is saturated — note this and either reframe (needs_work) or pass.` : "(Apify not configured — judge from the creator's own data only; you cannot label something 'rising' without velocity evidence.)"}
-4. Compare the spark against what works for this creator's audience. Be SPECIFIC about why it does or doesn't fit.
+${procedure}
 
 Verdict rules:
 - "add" → it clearly fits the creator's winning pattern, you have a concrete plan, and you're confident it would perform on par with or above their median. Fully flesh out the idea (every upload-ready field, every virality field).
@@ -275,7 +292,8 @@ export async function runEvaluateIdea({
 
   const integration = await loadIntegration(supabase, userId, integrationId);
   if (!integration) return { ok: false, error: "Integration not found." };
-  if (integration.provider !== "tiktok") {
+  const SUPPORTED = new Set(["tiktok", "youtube", "instagram"]);
+  if (!SUPPORTED.has(integration.provider)) {
     return {
       ok: false,
       error: `Unsupported provider: ${integration.provider}`,
@@ -307,8 +325,11 @@ export async function runEvaluateIdea({
     userId,
     [integration],
   );
-  if (!connected.includes("tiktok")) {
-    return { ok: false, error: "TikTok integration not connected." };
+  if (!connected.includes(integration.provider)) {
+    return {
+      ok: false,
+      error: `${integration.provider} integration not connected.`,
+    };
   }
 
   // Per-account preferences (free-text constraints).
@@ -376,6 +397,7 @@ export async function runEvaluateIdea({
   const system = buildPrompt({
     rawIdea: trimmed,
     today,
+    platform: integration.provider as "tiktok" | "youtube" | "instagram",
     hasApify: connected.includes("apify"),
     preferences,
     reviews,
