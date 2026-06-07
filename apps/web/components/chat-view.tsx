@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/markdown";
 import { ToolStep } from "@/components/tool-step";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export type StoredMessage = {
   id: string;
@@ -229,6 +230,14 @@ export function ChatView({
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Detached agent run on the server (e.g. another tab triggered it, or
+  // the user navigated away mid-stream and came back). Source-of-truth
+  // is the chat_turn_jobs table; we just mirror its `running` state.
+  const [remoteAgentRunning, setRemoteAgentRunning] = useState(false);
+  // Queue of user messages typed while a previous turn was still in
+  // flight. We send them sequentially so the agent sees them in the
+  // right order with the assistant turn already persisted between.
+  const [queued, setQueued] = useState<string[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
 
   // When the server passes fresh initialMessages (e.g. router.refresh
@@ -243,6 +252,92 @@ export function ChatView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialMessages]);
+
+  // Realtime: listen for messages + job-status transitions on this
+  // conversation. Two reasons we need this even when WE are the tab
+  // that kicked off the agent:
+  //   1. Another tab might have started a turn — we should see it.
+  //   2. We may have navigated away mid-stream; the route's
+  //      consumeStream() keeps the agent running and writes results
+  //      to the DB. When we come back, this subscription is the only
+  //      way we learn the turn finished.
+  useEffect(() => {
+    if (!convoId) return;
+    const supabase = createSupabaseBrowserClient();
+
+    const channel = supabase
+      .channel(`chat_${convoId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${convoId}`,
+        },
+        (payload) => {
+          const row = payload.new as StoredMessage;
+          setHistory((prev) =>
+            prev.some((m) => m.id === row.id) ? prev : [...prev, row],
+          );
+          // The transient UI (pendingUserText for the user's last typed
+          // message, streamParts for the in-flight assistant response)
+          // gets superseded the moment its persisted form lands. Drop
+          // the local copy so the same content doesn't render twice.
+          if (row.role === "user") setPendingUserText(null);
+          if (row.role === "assistant" || row.role === "tool") {
+            setStreamParts([]);
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "chat_turn_jobs",
+          filter: `conversation_id=eq.${convoId}`,
+        },
+        (payload) => {
+          const row = payload.new as { status: string };
+          if (row.status === "running") setRemoteAgentRunning(true);
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "chat_turn_jobs",
+          filter: `conversation_id=eq.${convoId}`,
+        },
+        (payload) => {
+          const row = payload.new as { status: string; error: string | null };
+          if (row.status === "done" || row.status === "failed") {
+            setRemoteAgentRunning(false);
+            if (row.status === "failed" && row.error) setError(row.error);
+          }
+        },
+      )
+      .subscribe();
+
+    // On mount, also seed remoteAgentRunning from the current state —
+    // if we're returning to a tab that has a 'running' job, we need
+    // to know without waiting for a transition.
+    supabase
+      .from("chat_turn_jobs")
+      .select("status")
+      .eq("conversation_id", convoId)
+      .eq("status", "running")
+      .limit(1)
+      .then(({ data }) => {
+        if (data && data.length > 0) setRemoteAgentRunning(true);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [convoId]);
 
   const historyBlocks = useMemo(() => flattenHistory(history), [history]);
   const streamBlocks = useMemo(
@@ -363,19 +458,27 @@ export function ChatView({
     }
   }
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || pending) return;
-
+  // Actual network + stream-consume for one turn. Reads the freshest
+  // `history` via the setHistory callback trick so back-to-back queued
+  // sends include each other's persisted user turn. (queueing relies
+  // on this; without it the second turn would see the same history
+  // snapshot as the first.)
+  async function dispatchTurn(text: string) {
     setPendingUserText(text);
     setStreamParts([]);
-    setInput("");
     setPending(true);
     setError(null);
 
     try {
-      const historyForApi = history
+      // Snapshot current history at send time. We use the functional
+      // setter to read latest without adding `history` as a dep.
+      let currentHistory: StoredMessage[] = [];
+      setHistory((h) => {
+        currentHistory = h;
+        return h;
+      });
+
+      const historyForApi = currentHistory
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({
           role: m.role as "user" | "assistant",
@@ -431,7 +534,9 @@ export function ChatView({
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setInput(text);
+      // On failure, surface the failed text back into the input rather
+      // than losing it. Don't requeue — the user can edit and retry.
+      setInput((cur) => cur || text);
     } finally {
       setPending(false);
       // Don't clear pendingUserText / streamParts here — the useEffect
@@ -440,11 +545,40 @@ export function ChatView({
     }
   }
 
+  // Drain the queue as soon as the current turn finishes. The realtime
+  // subscription fires for both remote and local jobs, so this effect
+  // re-runs whenever `pending` or `remoteAgentRunning` flips off.
+  useEffect(() => {
+    if (pending || remoteAgentRunning) return;
+    if (queued.length === 0) return;
+    const [next, ...rest] = queued;
+    setQueued(rest);
+    if (next) void dispatchTurn(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, remoteAgentRunning, queued]);
+
+  function send(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    setError(null);
+    // If a turn is in flight (locally or via another tab), queue this
+    // one and let the drain effect pick it up. Otherwise dispatch now.
+    if (pending || remoteAgentRunning) {
+      setQueued((q) => [...q, text]);
+    } else {
+      void dispatchTurn(text);
+    }
+  }
+
   const isEmpty =
     historyBlocks.length === 0 &&
     streamBlocks.length === 0 &&
     !pendingUserText &&
-    !pending;
+    !pending &&
+    !remoteAgentRunning &&
+    queued.length === 0;
 
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-neutral-950">
@@ -514,6 +648,27 @@ export function ChatView({
                 <StreamingDots />
               </div>
             )}
+
+            {/* Remote agent indicator — another tab kicked off the turn,
+                 OR we navigated away mid-stream and came back. Source is
+                 chat_turn_jobs realtime. */}
+            {!pending && remoteAgentRunning && (
+              <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+                <StreamingDots />
+                <span>Agent is still working in the background…</span>
+              </div>
+            )}
+
+            {/* Queued user messages waiting for the current turn to
+                 finish. Rendered as ghost-styled bubbles so the user
+                 can see what's lined up. */}
+            {queued.map((q, i) => (
+              <div key={`queued-${i}`} className="flex justify-end">
+                <div className="max-w-[80%] rounded-2xl border border-dashed border-neutral-300 px-4 py-2.5 text-sm whitespace-pre-wrap text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+                  {q}
+                </div>
+              </div>
+            ))}
           </div>
 
           {error && (
@@ -541,15 +696,19 @@ export function ChatView({
                 send(e as unknown as React.FormEvent);
               }
             }}
-            placeholder="Send a message…"
+            placeholder={
+              pending || remoteAgentRunning
+                ? "Send a message… (will queue after this turn)"
+                : "Send a message…"
+            }
             className="flex-1 resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
           />
           <button
             type="submit"
-            disabled={pending || input.trim().length === 0}
+            disabled={input.trim().length === 0}
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
           >
-            Send
+            {pending || remoteAgentRunning ? "Queue" : "Send"}
           </button>
         </div>
       </form>

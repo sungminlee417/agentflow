@@ -12,6 +12,12 @@ type IncomingMessage = { role: "user" | "assistant"; content: string };
 
 const MAX_STEPS = 12;
 
+// Keep the function alive long enough for multi-step tool loops. Vercel
+// kills the function at this boundary even if streamText is still going,
+// so the job row's `running` status doubles as a watchdog (the client
+// shows it indefinitely; a sweeper can mark it `failed` past the limit).
+export const maxDuration = 60;
+
 function systemPromptFor(connected: string[]): string {
   const lines = [
     "You are agentflow, a personal assistant with access to the user's connected tools.",
@@ -132,6 +138,16 @@ export async function POST(req: NextRequest) {
   const isFirstTurn = body.messages.length <= 1;
   const conversationTitle = isFirstTurn ? lastUser.content.slice(0, 80) : null;
 
+  // Insert a job row BEFORE streaming starts so the client (or any
+  // future tab) can detect "an agent turn is in flight" via realtime
+  // even if it never sees the SSE stream.
+  const { data: jobRow } = await supabase
+    .from("chat_turn_jobs")
+    .insert({ user_id: user.id, conversation_id: conversationId })
+    .select("id")
+    .single();
+  const jobId = jobRow?.id as string | undefined;
+
   const result = streamText({
     model,
     system: systemPromptFor(connected),
@@ -166,13 +182,52 @@ export async function POST(req: NextRequest) {
         .from("conversations")
         .update(updates)
         .eq("id", conversationId);
+
+      // Mark the turn job complete LAST — clients listening on this
+      // row treat the transition as "messages are now in the DB; safe
+      // to re-pull / drop the in-flight indicator".
+      if (jobId) {
+        await supabase
+          .from("chat_turn_jobs")
+          .update({
+            status: "done",
+            finished_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      }
     },
-    onError: ({ error }) => {
+    onError: async ({ error }) => {
       console.error("Stream error:", error);
+      if (jobId) {
+        await supabase
+          .from("chat_turn_jobs")
+          .update({
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+            finished_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      }
     },
   });
 
+  // Force the streamText to consume to completion regardless of whether
+  // the response is actually read by the client. Without this, navigating
+  // away from /chat mid-generation cancels the model call and we never
+  // hit onFinish — the assistant turn is lost. With consumeStream(), the
+  // stream drains in the background, onFinish persists messages + closes
+  // the job, and the client picks it all up via realtime on its next
+  // page load.
+  result.consumeStream({
+    onError: (e) => console.error("background consumeStream failed:", e),
+  });
+
   return result.toUIMessageStreamResponse({
-    headers: { "X-Conversation-Id": conversationId },
+    headers: {
+      "X-Conversation-Id": conversationId,
+      ...(jobId ? { "X-Job-Id": jobId } : {}),
+    },
   });
 }
