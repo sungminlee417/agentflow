@@ -207,6 +207,22 @@ const PROVIDER_LABELS: Record<string, string> = {
   instagram: "Instagram",
 };
 
+// Per-provider tinted chip background. Single source of truth — the
+// chip class string used to be duplicated 4× across the file.
+const PROVIDER_CHIP_CLASS: Record<string, string> = {
+  tiktok: "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200",
+  youtube: "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200",
+  instagram:
+    "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200",
+};
+
+function providerChipClass(provider: string | null | undefined): string {
+  return (
+    PROVIDER_CHIP_CLASS[(provider ?? "").toLowerCase()] ??
+    "bg-neutral-100 text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
+  );
+}
+
 // Preset reasons surfaced in the thumbs-down feedback modal. Keep in
 // sync with the backend's VALID_REASONS in
 // apps/web/app/api/video-ideas/[id]/feedback/route.ts and the
@@ -904,18 +920,23 @@ export function VideoIdeasList({
       <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
         <div className="rounded-lg border border-dashed border-neutral-300 px-6 py-14 text-center dark:border-neutral-700">
           <h2 className="text-base font-medium text-neutral-900 dark:text-neutral-100">
-            No accounts connected
+            Connect an account to get started
           </h2>
           <p className="mt-2 text-sm text-neutral-500">
-            Connect a TikTok, YouTube, or Instagram account to start
-            generating ideas tailored to it.
+            Link a TikTok, YouTube, or Instagram account — the agent reads
+            your top performers, your niche, and what&apos;s breaking out
+            right now to generate ideas tailored to you.
           </p>
           <Link
             href="/integrations"
             className="mt-4 inline-block rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
           >
-            Connect an account
+            Connect an account →
           </Link>
+          <p className="mt-4 text-xs text-neutral-500">
+            Once connected, hit <span className="font-medium">Refresh all</span>{" "}
+            in the header to generate your first batch.
+          </p>
         </div>
       </div>
     );
@@ -975,12 +996,7 @@ export function VideoIdeasList({
           const acct = g.account;
           const count = accountCounts.get(acct.id) ?? 0;
           const active = filterAccountId === acct.id;
-          const chipClass =
-            acct.provider === "tiktok"
-              ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
-              : acct.provider === "youtube"
-                ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
-                : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200";
+          const chipClass = providerChipClass(acct.provider);
           return (
             <button
               key={acct.id}
@@ -1027,13 +1043,9 @@ export function VideoIdeasList({
               >
                 <span className="flex items-center gap-1.5">
                   <span
-                    className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                      acct?.provider === "tiktok"
-                        ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
-                        : acct?.provider === "youtube"
-                          ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
-                          : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200"
-                    }`}
+                    className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${providerChipClass(
+                      acct?.provider,
+                    )}`}
                   >
                     {acct ? PROVIDER_LABELS[acct.provider] ?? acct.provider : "?"}
                   </span>
@@ -1056,6 +1068,7 @@ export function VideoIdeasList({
           <button
             type="button"
             onClick={() => setError(null)}
+            aria-label="Dismiss error"
             className="opacity-60 hover:opacity-100"
           >
             ✕
@@ -1068,6 +1081,7 @@ export function VideoIdeasList({
           <button
             type="button"
             onClick={() => setMessage(null)}
+            aria-label="Dismiss message"
             className="opacity-60 hover:opacity-100"
           >
             ✕
@@ -1162,19 +1176,66 @@ export function VideoIdeasList({
 
       <section className="mt-4 divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-950">
         {filtered.length === 0 ? (
-          <div className="rounded-lg px-4 py-10 text-center text-sm text-neutral-500">
+          <div className="rounded-lg px-4 py-12 text-center text-sm text-neutral-500">
             {view === "pending" &&
-              (pendingIdeas.length === 0
-                ? "No ideas yet. Hit Refresh all to generate the first batch."
-                : "No ideas match this filter.")}
+              (pendingIdeas.length === 0 ? (
+                <>
+                  <p className="font-medium text-neutral-700 dark:text-neutral-200">
+                    No ideas yet
+                  </p>
+                  <p className="mt-1">
+                    Hit <span className="font-medium">Refresh all</span> above
+                    to generate your first batch — one per connected account.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>No ideas match this filter.</p>
+                  {(filter !== "all" || filterAccountId) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilter("all");
+                        setFilterAccountId(null);
+                      }}
+                      className="mt-2 text-xs text-neutral-700 underline hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </>
+              ))}
             {view === "scheduled" &&
-              (scheduledIdeas.length === 0
-                ? "Nothing in your queue. Pick an idea and Add to plan."
-                : "No queued ideas match this filter.")}
+              (scheduledIdeas.length === 0 ? (
+                <>
+                  <p className="font-medium text-neutral-700 dark:text-neutral-200">
+                    Nothing in your queue
+                  </p>
+                  <p className="mt-1">
+                    Open an idea from the <span className="font-medium">Ideas</span>{" "}
+                    tab and hit <span className="font-medium">Add to plan</span> to
+                    commit to it.
+                  </p>
+                </>
+              ) : (
+                "No queued ideas match this filter."
+              ))}
             {view === "posted" &&
-              (postedIdeas.length === 0
-                ? "Nothing posted yet."
-                : "No posted videos match this filter.")}
+              (postedIdeas.length === 0 ? (
+                <>
+                  <p className="font-medium text-neutral-700 dark:text-neutral-200">
+                    Nothing posted yet
+                  </p>
+                  <p className="mt-1">
+                    Once you mark an idea as posted, the agent pulls stats at
+                    +48h and +7d and writes a post-mortem here. You can also
+                    use <span className="font-medium">Import</span> above to
+                    review videos from your back catalogue.
+                  </p>
+                </>
+              ) : (
+                "No posted videos match this filter."
+              ))}
           </div>
         ) : view === "scheduled" ? (
           <DndContext
@@ -1371,12 +1432,7 @@ function AccountSettingsModal({
         {groups.map((g) => {
           const acct = g.account;
           const target = targets.get(acct.id) ?? g.targetCount;
-          const chipClass =
-            acct.provider === "tiktok"
-              ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
-              : acct.provider === "youtube"
-                ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
-                : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200";
+          const chipClass = providerChipClass(acct.provider);
           return (
             <details
               key={acct.id}
@@ -2546,12 +2602,7 @@ function CompactIdeaCard({
   // accounts on the same platform.
   const platform = (i.provider ?? account?.provider ?? "").toLowerCase();
   const platformLabel = PLATFORM_LABELS[platform] ?? PROVIDER_LABELS[platform] ?? platform;
-  const platformClass =
-    platform === "tiktok"
-      ? "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200"
-      : platform === "youtube"
-        ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200"
-        : "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200";
+  const platformClass = providerChipClass(platform);
   const accountLabel = account ? accountTitle(account) : "Unknown account";
   return (
     <div
@@ -2635,6 +2686,7 @@ function CompactIdeaCard({
               e.stopPropagation();
               onThumbsDown();
             }}
+            aria-label="This idea won't work — tell us why"
             title="This idea won't work — tell us why"
             className={`${
               ready ? "" : "ml-auto"

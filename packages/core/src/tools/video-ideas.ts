@@ -264,24 +264,42 @@ export function buildVideoIdeasTools(
 
     video_ideas_mark_posted: tool({
       description:
-        "Link an idea to the actual TikTok video the user posted, mark the idea 'done', and schedule a performance review at +48h. Accepts either the full TikTok URL (preferred — we parse the numeric video id out) or the raw video id. After this, the worker will pull stats + write a post-mortem automatically; the user can also trigger early review via video_ideas_run_review.",
+        "Link an idea to the actual video the user posted, mark the idea 'done', and schedule a performance review at +48h. Works for TikTok, YouTube, and Instagram — the platform is detected from the idea's source account. Accepts either the full URL (preferred — we parse the platform-specific id out) or the raw id. After this, the worker will pull stats + write a post-mortem automatically; the user can also trigger early review via video_ideas_run_review.",
       inputSchema: z.object({
         id: z.string().uuid(),
         posted_video_url: z.string().nullish(),
         posted_video_id: z.string().nullish(),
       }),
       execute: async ({ id, posted_video_url, posted_video_id }) => {
+        // Resolve the platform from the idea's source integration so
+        // we extract the right id shape. Fall back to TikTok parsing
+        // when an explicit id was passed (legacy path).
+        const { data: ideaRow } = await supabase
+          .from("video_ideas")
+          .select("provider")
+          .eq("user_id", userId)
+          .eq("id", id)
+          .maybeSingle();
+        const platform = (ideaRow?.provider as string | undefined) ?? "tiktok";
+        const { extractPostedVideoId } = await import(
+          "../agents/video-review-agent"
+        );
         const videoId =
-          posted_video_id ?? extractTikTokVideoId(posted_video_url ?? "");
+          posted_video_id ??
+          extractPostedVideoId(platform, posted_video_url ?? "");
         if (!videoId) {
           return {
             ok: false,
-            error:
-              "Could not parse a video id. TikTok URLs look like https://www.tiktok.com/@user/video/1234567890.",
+            error: `Could not parse a ${platform} video id from the URL. Make sure you're passing the full link.`,
           };
         }
         const url =
-          posted_video_url ?? `https://www.tiktok.com/video/${videoId}`;
+          posted_video_url ??
+          (platform === "tiktok"
+            ? `https://www.tiktok.com/video/${videoId}`
+            : platform === "youtube"
+              ? `https://www.youtube.com/watch?v=${videoId}`
+              : `https://www.instagram.com/reel/${videoId}/`);
         const postedAt = new Date();
         const nextReview = new Date(
           postedAt.getTime() + 48 * 60 * 60 * 1000,
