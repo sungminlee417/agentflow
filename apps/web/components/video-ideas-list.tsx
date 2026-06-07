@@ -40,237 +40,43 @@ import { MarkDoneModal } from "@/components/mark-done-modal";
 import { QuickAddIdea } from "@/components/quick-add-idea";
 import { AccountPreferences } from "@/components/account-preferences";
 import { useConfirm } from "@/components/confirm-dialog";
+import {
+  FEEDBACK_REASONS,
+  KIND_COLORS,
+  KIND_LABELS,
+  PLATFORM_LABELS,
+  PROVIDER_LABELS,
+  VERDICT_COLORS,
+  VERDICT_LABELS,
+} from "@/components/video-ideas/constants";
+import {
+  accountTitle,
+  cardRatio,
+  expiresLabel,
+  formatRelative,
+  formatUntil,
+  isUrgent,
+  providerChipClass,
+} from "@/components/video-ideas/helpers";
+import type {
+  AccountGroup as AccountGroupType,
+  ActiveGenerationJob as ActiveGenerationJobType,
+  IdeasAccount as IdeasAccountType,
+  KindFilter,
+  LinkableAccount as LinkableAccountType,
+  PostedRow as PostedRowType,
+  VideoIdeaRow as VideoIdeaRowType,
+} from "@/components/video-ideas/types";
 
-export type VideoIdeaRow = {
-  id: string;
-  provider: string;
-  integration_id: string | null;
-  title: string;
-  hook: string | null;
-  format: string | null;
-  rationale: string | null;
-  kind: "pattern" | "trend" | "rising" | "competitor" | "seasonal";
-  source_refs: Record<string, unknown> | null;
-  saturation_warning: string | null;
-  /** "short" | "long" | null — only YouTube ideas distinguish; TT/IG
-   *  are short-only platforms so this is null for them. */
-  video_format: "short" | "long" | null;
-  expires_at: string;
-  status: "pending" | "scheduled" | "done" | "dismissed";
-  priority: number;
-  created_at: string;
-  script: string | null;
-  post_title: string | null;
-  description: string | null;
-  hashtags: string[] | null;
-  cta: string | null;
-  visual_notes: string | null;
-  optimal_post_window: string | null;
-  suggested_duration: string | null;
-  thumbnail_concept: string | null;
-  engagement_hook: string | null;
-  trending_sound: string | null;
-  posted_video_id: string | null;
-  posted_video_url: string | null;
-  posted_at: string | null;
-  performance_verdict:
-    | "hit"
-    | "on_track"
-    | "underperformed"
-    | "too_early"
-    | null;
-  performance_score: number | null;
-  performance_review: string | null;
-  performance_stats: {
-    views?: number;
-    likes?: number;
-    comments?: number;
-    shares?: number;
-    engagement_rate?: number;
-    baseline_median_rate?: number;
-    ratio?: number;
-    /** True when this stats blob is the cross-platform synthesis
-     *  aggregate (totals across all platforms + average ratio) rather
-     *  than the legacy single-post stats. */
-    cross_platform?: boolean;
-    platform_count?: number;
-  } | null;
-  last_reviewed_at: string | null;
-  next_review_at: string | null;
-  /** Per-platform posts. Multi-row when the same shoot landed on more
-   *  than one platform (TikTok + YT Shorts + IG Reels). Empty array
-   *  for ideas that haven't been marked posted yet. */
-  posts?: PostedRow[];
-  /** Per-platform caption packaging produced by the generator. Only
-   *  the platforms the user has connected are populated; legacy ideas
-   *  pre-Phase-3 have this null and fall back to post_title /
-   *  description / hashtags. */
-  platforms?: {
-    tiktok?: { caption: string; hashtags: string[] };
-    youtube?: { title: string; description: string; hashtags: string[] };
-    instagram?: { caption: string; hashtags: string[] };
-  } | null;
-};
-
-export type PostedRow = {
-  id: string;
-  integration_id: string;
-  platform: string;
-  posted_video_id: string;
-  posted_video_url: string | null;
-  posted_at: string;
-  performance_verdict:
-    | "hit"
-    | "on_track"
-    | "underperformed"
-    | "too_early"
-    | null;
-  performance_score: number | null;
-  performance_review: string | null;
-  performance_stats: {
-    views?: number;
-    likes?: number;
-    comments?: number;
-    shares?: number;
-    engagement_rate?: number;
-    baseline_median_rate?: number;
-    ratio?: number;
-  } | null;
-  last_reviewed_at: string | null;
-  next_review_at: string | null;
-};
-
-export type IdeasAccount = {
-  id: string;
-  provider: string;
-  handle: string | null;
-  displayName: string | null;
-  accountLabel: string | null;
-  providerAccountId: string;
-};
-
-export type LinkableAccount = {
-  id: string;
-  platform: string;
-  label: string;
-};
-
-export type ActiveGenerationJob = {
-  id: string;
-  step_count: number;
-  step_label: string;
-  requested_count: number | null;
-  started_at: string;
-};
-
-// One account's bundle of data on the master /video-ideas page. Each
-// account (= each connected TT/YT/IG integration) gets its own section
-// in the unified feed. The agent generates ideas natively for the
-// account's own platform — no cross-pack at generation time — and the
-// section renders a compact card grid for that account's ideas.
-export type AccountGroup = {
-  account: IdeasAccount;
-  ideas: VideoIdeaRow[];
-  targetCount: number;
-  preferences: string | null;
-  activeJob: ActiveGenerationJob | null;
-};
-
-type KindFilter = "all" | VideoIdeaRow["kind"];
-
-const KIND_LABELS: Record<VideoIdeaRow["kind"], string> = {
-  pattern: "Pattern",
-  trend: "Trend",
-  rising: "↗ Rising",
-  competitor: "Competitor",
-  seasonal: "Seasonal",
-};
-
-const KIND_COLORS: Record<VideoIdeaRow["kind"], string> = {
-  pattern:
-    "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
-  trend: "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300",
-  // Rising gets a brighter, more saturated treatment so it actively
-  // catches the eye in a list — these have the shortest TTL and are
-  // the user's "act fast" candidates.
-  rising:
-    "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-950/50 dark:text-fuchsia-200 ring-1 ring-fuchsia-300/60 dark:ring-fuchsia-800/60",
-  competitor:
-    "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300",
-  seasonal:
-    "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
-};
-
-const PROVIDER_LABELS: Record<string, string> = {
-  tiktok: "TikTok",
-  youtube: "YouTube",
-  instagram: "Instagram",
-};
-
-// Per-provider tinted chip background. Single source of truth — the
-// chip class string used to be duplicated 4× across the file.
-const PROVIDER_CHIP_CLASS: Record<string, string> = {
-  tiktok: "bg-pink-100 text-pink-800 dark:bg-pink-950/40 dark:text-pink-200",
-  youtube: "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200",
-  instagram:
-    "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-200",
-};
-
-function providerChipClass(provider: string | null | undefined): string {
-  return (
-    PROVIDER_CHIP_CLASS[(provider ?? "").toLowerCase()] ??
-    "bg-neutral-100 text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
-  );
-}
-
-// Preset reasons surfaced in the thumbs-down feedback modal. Keep in
-// sync with the backend's VALID_REASONS in
-// apps/web/app/api/video-ideas/[id]/feedback/route.ts and the
-// REASON_LABELS map in packages/core/src/agents/video-ideas-agent.ts.
-const FEEDBACK_REASONS: Array<{ code: string; label: string }> = [
-  { code: "outdated_trend", label: "Outdated trend" },
-  { code: "wrong_voice", label: "Doesn't fit my voice" },
-  { code: "flopped_before", label: "Tried similar — flopped" },
-  { code: "platform_wrong", label: "Platform-wrong (TT trick on YT, etc.)" },
-  { code: "off_brand", label: "Off-brand topic" },
-  { code: "other", label: "Other" },
-];
-
-function expiresLabel(iso: string): string {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (ms <= 0) return "expired";
-  const days = Math.floor(ms / 86_400_000);
-  if (days >= 1) return `expires in ${days}d`;
-  const hours = Math.max(1, Math.round(ms / 3_600_000));
-  return `expires in ${hours}h`;
-}
-
-// Resolve a single ratio to show on the card / sort by, with the same
-// fallback rule as the verdict chip: idea.performance_stats only gets
-// populated by cross-platform synthesis; single-platform posts +
-// imports keep their stats on the post row. Without this fallback,
-// imported videos sort to the bottom of "best performing" even when
-// they're hits.
-function cardRatio(i: VideoIdeaRow): number | undefined {
-  if (i.performance_stats?.ratio != null) return i.performance_stats.ratio;
-  const reviewedPost = i.posts?.find(
-    (p) => p.performance_stats?.ratio != null,
-  );
-  return reviewedPost?.performance_stats?.ratio;
-}
-
-function isUrgent(iso: string): boolean {
-  const ms = new Date(iso).getTime() - Date.now();
-  return ms > 0 && ms < 3 * 86_400_000;
-}
-
-function accountTitle(a: IdeasAccount): string {
-  if (a.accountLabel) return a.accountLabel;
-  if (a.displayName && a.handle) return `${a.displayName} (@${a.handle})`;
-  if (a.displayName) return a.displayName;
-  if (a.handle) return `@${a.handle}`;
-  return "Legacy account";
-}
+// Re-export the shared types so the existing public API
+// (`@/components/video-ideas-list`) keeps working — the page
+// imports VideoIdeaRow etc. from here.
+export type VideoIdeaRow = VideoIdeaRowType;
+export type PostedRow = PostedRowType;
+export type IdeasAccount = IdeasAccountType;
+export type LinkableAccount = LinkableAccountType;
+export type ActiveGenerationJob = ActiveGenerationJobType;
+export type AccountGroup = AccountGroupType;
 
 // Master /video-ideas page entry point. ONE unified flat feed across
 // every connected account, with a single "Refresh all" button that
@@ -2230,48 +2036,6 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-const VERDICT_LABELS: Record<NonNullable<VideoIdeaRow["performance_verdict"]>, string> = {
-  hit: "Hit",
-  on_track: "On track",
-  underperformed: "Underperformed",
-  too_early: "Too early to tell",
-};
-
-const VERDICT_COLORS: Record<
-  NonNullable<VideoIdeaRow["performance_verdict"]>,
-  string
-> = {
-  hit: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
-  on_track:
-    "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200",
-  underperformed:
-    "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300",
-  too_early:
-    "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300",
-};
-
-function formatRelative(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (ms < 60_000) return "just now";
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
-  return `${Math.round(ms / 86_400_000)}d ago`;
-}
-
-function formatUntil(iso: string): string {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (ms <= 0) return "due now";
-  if (ms < 3_600_000) return `in ${Math.max(1, Math.round(ms / 60_000))}m`;
-  if (ms < 86_400_000) return `in ${Math.round(ms / 3_600_000)}h`;
-  return `in ${Math.round(ms / 86_400_000)}d`;
-}
-
-const PLATFORM_LABELS: Record<string, string> = {
-  tiktok: "TikTok",
-  youtube: "YouTube",
-  instagram: "Instagram",
-};
-
 function PerformanceBlock({
   i,
   reviewingId,
@@ -2705,170 +2469,6 @@ function CompactIdeaCard({
         </p>
       )}
     </div>
-  );
-}
-
-// Card body rendered inside the article (sortable or static). Lives
-// here rather than inline in the map so both render paths stay in
-// sync. All the per-card actions and the performance + virality
-// blocks are part of this.
-function IdeaCardBody({
-  i,
-  reviewingId,
-  runReviewNow,
-  setDetailIdeaId,
-  setStatus,
-  setMarkDoneIdeaId,
-  remove,
-  deletePosted,
-}: {
-  i: VideoIdeaRow;
-  reviewingId: string | null;
-  runReviewNow: (id: string, postId?: string) => void;
-  setDetailIdeaId: (id: string) => void;
-  setStatus: (id: string, status: VideoIdeaRow["status"]) => void;
-  setMarkDoneIdeaId: (id: string) => void;
-  remove: (id: string) => void;
-  deletePosted: (id: string) => void;
-}) {
-  const hasFullContent =
-    !!i.script ||
-    !!i.description ||
-    (i.hashtags?.length ?? 0) > 0 ||
-    !!i.platforms?.tiktok ||
-    !!i.platforms?.youtube ||
-    !!i.platforms?.instagram;
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${KIND_COLORS[i.kind]}`}
-        >
-          {KIND_LABELS[i.kind]}
-        </span>
-        {i.status !== "done" && i.status !== "scheduled" && (
-          <span
-            className={`text-xs ${
-              isUrgent(i.expires_at)
-                ? "text-rose-600 dark:text-rose-400"
-                : "text-neutral-500"
-            }`}
-          >
-            {expiresLabel(i.expires_at)}
-          </span>
-        )}
-        {hasFullContent && (
-          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
-            Upload-ready
-          </span>
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={() => setDetailIdeaId(i.id)}
-        className="mt-2 text-left text-sm font-semibold text-neutral-900 hover:underline dark:text-neutral-100"
-      >
-        {i.title}
-      </button>
-      {i.hook && (
-        <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">
-          <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
-            Hook ·{" "}
-          </span>
-          {i.hook}
-        </p>
-      )}
-      {i.format && (
-        <p className="mt-1 text-xs text-neutral-500">Format: {i.format}</p>
-      )}
-      {i.rationale && (
-        <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
-          {i.rationale}
-        </p>
-      )}
-      {i.saturation_warning && (
-        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-          <AlertTriangle
-            className="mt-0.5 h-3 w-3 shrink-0"
-            aria-hidden="true"
-          />
-          <span>
-            <span className="font-medium">Saturated · </span>
-            {i.saturation_warning}
-          </span>
-        </div>
-      )}
-      <SourceRefs refs={i.source_refs} />
-      <ViralityStrip i={i} />
-      {i.status === "done" && (
-        <PerformanceBlock
-          i={i}
-          reviewingId={reviewingId}
-          onReview={(postId) => runReviewNow(i.id, postId)}
-        />
-      )}
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => setDetailIdeaId(i.id)}
-          className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-        >
-          View details →
-        </button>
-        {i.status === "pending" && (
-          <>
-            <button
-              type="button"
-              onClick={() => setStatus(i.id, "scheduled")}
-              className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            >
-              + Add to plan
-            </button>
-            <button
-              type="button"
-              onClick={() => setMarkDoneIdeaId(i.id)}
-              className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            >
-              Mark posted…
-            </button>
-            <button
-              type="button"
-              onClick={() => remove(i.id)}
-              className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
-            >
-              Dismiss
-            </button>
-          </>
-        )}
-        {i.status === "scheduled" && (
-          <>
-            <button
-              type="button"
-              onClick={() => setMarkDoneIdeaId(i.id)}
-              className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            >
-              Mark posted…
-            </button>
-            <button
-              type="button"
-              onClick={() => setStatus(i.id, "pending")}
-              className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
-            >
-              Remove from plan
-            </button>
-          </>
-        )}
-        {i.status === "done" && (
-          <button
-            type="button"
-            onClick={() => deletePosted(i.id)}
-            className="rounded-md px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/30 dark:hover:text-red-400"
-          >
-            Delete
-          </button>
-        )}
-      </div>
-    </>
   );
 }
 
