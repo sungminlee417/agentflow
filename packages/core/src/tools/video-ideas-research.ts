@@ -125,5 +125,56 @@ export function buildVideoIdeasResearchTools(
         });
       },
     }),
+
+    video_ideas_find_recent_feedback: tool({
+      description:
+        "Look up the creator's recent thumbs-down rejections for this account. Use BEFORE proposing any idea similar to recent rejections — past 'this won't work' signals are the strongest reason to NOT regenerate something. Returns title, kind, format, hook, reason_code (outdated_trend / wrong_voice / flopped_before / platform_wrong / off_brand / other) and the creator's free-text note when present.",
+      inputSchema: z.object({
+        reason_code: z
+          .enum([
+            "outdated_trend",
+            "wrong_voice",
+            "flopped_before",
+            "platform_wrong",
+            "off_brand",
+            "other",
+          ])
+          .optional()
+          .describe(
+            "Restrict to rejections of a specific failure mode. E.g. 'outdated_trend' to see what trends the creator has called dead.",
+          ),
+        kind: z
+          .enum(["pattern", "trend", "rising", "competitor", "seasonal"])
+          .optional()
+          .describe("Restrict to rejections of one kind."),
+        limit: z.number().int().min(1).max(30).default(15),
+      }),
+      execute: async ({ reason_code, kind, limit }) => {
+        let q = supabase
+          .from("video_idea_feedback")
+          .select(
+            "idea_title, idea_kind, idea_format, idea_hook, reason_code, free_text, created_at",
+          )
+          .eq("user_id", userId)
+          .eq("integration_id", integrationId)
+          .order("created_at", { ascending: false })
+          .limit(limit);
+        if (reason_code) q = q.eq("reason_code", reason_code);
+        if (kind) q = q.eq("idea_kind", kind);
+        const { data, error } = await q;
+        if (error) {
+          throw new Error(`find_recent_feedback failed: ${error.message}`);
+        }
+        return (data ?? []).map((row) => ({
+          title: row.idea_title,
+          kind: row.idea_kind,
+          format: row.idea_format,
+          hook: row.idea_hook,
+          reason_code: row.reason_code,
+          free_text: row.free_text,
+          created_at: row.created_at,
+        }));
+      },
+    }),
   };
 }

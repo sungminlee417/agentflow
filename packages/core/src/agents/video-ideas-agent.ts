@@ -138,6 +138,9 @@ const IDEAS_ENVELOPE_SCHEMA = z.union([
 const SIMILAR_REVIEWS_TOOL_LINE =
   "- Targeted back-catalogue lookup: video_ideas_find_similar_reviews (format/kind/title_keywords) — use BEFORE finalising any idea you're unsure about, to surface past hits/flops on the same format/topic. The strongest signal you have.";
 
+const FEEDBACK_LOOKUP_TOOL_LINE =
+  "- Recent rejections lookup: video_ideas_find_recent_feedback (reason_code/kind) — pull additional thumbs-down history beyond the 15 dumped above. Use when considering anything in adjacent territory to a recent rejection.";
+
 function describeAvailable(connected: string[]): string {
   const lines: string[] = [];
   lines.push(
@@ -154,6 +157,7 @@ function describeAvailable(connected: string[]): string {
     );
   }
   lines.push(SIMILAR_REVIEWS_TOOL_LINE);
+  lines.push(FEEDBACK_LOOKUP_TOOL_LINE);
   lines.push(
     "- Uploaded analytics: list_my_analytics_uploads, get_analytics_upload",
   );
@@ -167,6 +171,7 @@ function describeYouTubeAvailable(): string {
     "- Niche/competitor discovery: youtube_search_niche (query, order, published_after_days)",
     "- Audience sentiment: youtube_get_video_comments",
     SIMILAR_REVIEWS_TOOL_LINE,
+    FEEDBACK_LOOKUP_TOOL_LINE,
     "- Uploaded analytics CSVs: list_my_analytics_uploads, get_analytics_upload",
   ].join("\n");
 }
@@ -184,6 +189,7 @@ function describeInstagramAvailable(connected: string[]): string {
     );
   }
   lines.push(SIMILAR_REVIEWS_TOOL_LINE);
+  lines.push(FEEDBACK_LOOKUP_TOOL_LINE);
   lines.push("- Uploaded analytics CSVs: list_my_analytics_uploads, get_analytics_upload");
   return lines.join("\n");
 }
@@ -219,6 +225,40 @@ function reviewsBlock(reviews: RecentReview[]): string {
   return lines.join("\n");
 }
 
+type RecentFeedback = {
+  title: string;
+  kind: string;
+  format: string | null;
+  hook: string | null;
+  reason_code: string;
+  free_text: string | null;
+};
+
+const REASON_LABELS: Record<string, string> = {
+  outdated_trend: "trend was already stale",
+  wrong_voice: "doesn't fit the creator's voice",
+  flopped_before: "they tried something similar and it flopped",
+  platform_wrong: "wrong platform fit (e.g. TikTok trick on YouTube)",
+  off_brand: "off-brand topic for this account",
+  other: "rejected (other)",
+};
+
+function feedbackBlock(items: RecentFeedback[]): string {
+  if (items.length === 0) return "";
+  const lines: string[] = [
+    "",
+    "Recent thumbs-down feedback — ideas the creator EXPLICITLY rejected. The next batch MUST avoid repeating these failure modes. If you propose anything in adjacent territory, your rationale must cite which rejection you're deliberately differentiating from:",
+  ];
+  for (const f of items) {
+    const tags = [f.kind, f.format ?? "?"].filter((t): t is string => !!t).join(", ");
+    const reason = REASON_LABELS[f.reason_code] ?? f.reason_code;
+    lines.push(`- "${f.title}" (${tags}): ${reason}`);
+    if (f.hook) lines.push(`  Hook was: "${f.hook}"`);
+    if (f.free_text) lines.push(`  Creator note: ${f.free_text}`);
+  }
+  return lines.join("\n");
+}
+
 function preferencesBlock(preferences: string | null): string {
   if (!preferences || !preferences.trim()) return "";
   return `
@@ -250,18 +290,20 @@ function tiktokPrompt(
   today: string,
   connected: string[],
   recentReviews: RecentReview[] = [],
+  recentFeedback: RecentFeedback[] = [],
   preferences: string | null = null,
   targetPlatforms: string[] = ["tiktok"],
 ): string {
   const hasApify = connected.includes("apify");
   const hasReviews = recentReviews.length > 0;
-  return `You are a TikTok content strategist. Produce exactly ${count} fresh video ideas as a JSON object.
+  const hasFeedback = recentFeedback.length > 0;
+  return `You are a TikTok content strategist. Produce UP TO ${count} fresh video ideas as a JSON object. Quality > quantity — if signal is genuinely thin, return fewer ideas with strong evidence rather than ${count} with two fudged.
 
 OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
 ${describeAvailable(connected)}
-${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}${platformsBlock(targetPlatforms)}
+${reviewsBlock(recentReviews)}${feedbackBlock(recentFeedback)}${preferencesBlock(preferences)}${platformsBlock(targetPlatforms)}
 
 PROCEDURE
 1. tiktok_top_my_videos (top_n 10, from_history 100) — lifetime best by engagement rate.
@@ -278,21 +320,58 @@ ${hasApify ? `5. For top 2-3 hashtags, tiktok_search_hashtag (limit 25):
 6. For 1-2 competitor handles, tiktok_get_profile (videos_limit 10).
 7. list_my_analytics_uploads — any CSV uploads.` : `5. No Apify — skip competitor/trend/rising. Lean on pattern + seasonal.
 6. list_my_analytics_uploads — any CSV uploads.`}
-8. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either (a) refine the idea so it inherits what worked, or (b) drop the idea if past attempts at the same format clearly flopped. SKIP this only when the back catalogue genuinely has no similar work yet.
+8. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either (a) refine the idea so it inherits what worked, or (b) drop the idea if past attempts at the same format clearly flopped. SKIP this only when the back catalogue genuinely has no similar work yet.${hasFeedback ? `
+9. If you're about to pitch a kind=trend, kind=rising, or kind=competitor idea about a topic similar to anything in the feedback block above, call video_ideas_find_recent_feedback(kind: 'trend' | 'rising' | 'competitor') to confirm whether the creator has already rejected this exact angle. If yes — pick a different angle or downgrade to pattern.` : ""}
 
-KINDS (balance across these)
+EVIDENCE FLOORS — HARD RULES (not aspirational)
+
+Before committing to any non-pattern, non-seasonal idea, check the floor below. If you can't clear it, in order of preference:
+  (1) Downgrade to kind="pattern" and ground in the creator's own top performers instead.
+  (2) Drop the idea and produce fewer than ${count} total. Honest under-delivery beats fabricated signal.
+  (3) Replace with a different idea that DOES clear the floor.
+
+Compute USER_MEDIAN_PLAYS = median of stats.playCount across the top-10 results from tiktok_top_my_videos.
+
+COMPETITOR floor:
+- competitor_video.stats.plays >= 0.5 × USER_MEDIAN_PLAYS
+- competitor account authorMeta.fans (followers) >= 1000
+- Required source_refs: {competitor_handle, competitor_video_url, competitor_video_plays, competitor_followers, user_median_plays}
+- Example FAIL: USER_MEDIAN_PLAYS = 80k and the best candidate you found has 11k plays — that's an automatic skip, not a competitor.
+
+TREND floor:
+- Sample is from the last 14 days AND sample.stats.plays >= 0.5 × USER_MEDIAN_PLAYS
+- Required source_refs: {hashtag, sample_url, sample_plays, sample_create_time}
+
+RISING floor:
+- velocity_ratio = (top plays last 3-7d) / (top plays prior 7-14d) >= 1.5
+- Required source_refs: {hashtag, recent_window_top_plays, prior_window_top_plays, velocity_ratio}
+- Below 1.5 → call it trend (if it clears trend floor) or skip.
+
+HASHTAG-SEARCH FILTERING for competitor selection:
+After tiktok_search_hashtag returns N rows:
+  (a) Sort by stats.plays descending.
+  (b) Compute the median plays across the returned set; the "top half" is anything >= that median.
+  (c) ONLY consider videos in the top half as competitor candidates.
+  (d) ALSO require stats.plays >= 0.5 × USER_MEDIAN_PLAYS per the competitor floor.
+The double filter is intentional: top-half-of-hashtag prevents picking the weakest match in a saturated tag; >=50% USER_MEDIAN prevents the hashtag itself being a low-engagement niche where even the leaders underperform the creator.
+
+HONEST UNDER-DELIVERY:
+Default target is ${count} but the caller accepts FEWER. If signal is thin (no Apify, small back-catalogue, weak hashtag results), produce fewer ideas with high confidence rather than ${count} with two of them fudged. Never invent a stat or handle to hit ${count}.
+
+KINDS (balance across these — subject to evidence floors above)
 - pattern: extrapolate from a winning format — a NEW song/topic that fits.
-- ${hasApify ? `competitor: source_refs={competitor_handle, competitor_video_url}. Something they nailed and the user hasn't.` : `competitor: skip (no Apify).`}
-- ${hasApify ? `trend: source_refs={hashtag, trending_sound?}. Currently visible, not yet saturated.` : `trend: skip (no Apify).`}
-- ${hasApify ? `rising: velocity ACCELERATING last 3-7d. source_refs must include velocity_note. Max 1-2 per refresh.` : `rising: skip (no Apify).`}
+- ${hasApify ? `competitor: meets COMPETITOR floor. Something they nailed and the user hasn't.` : `competitor: skip (no Apify).`}
+- ${hasApify ? `trend: meets TREND floor. Currently visible, not yet saturated.` : `trend: skip (no Apify).`}
+- ${hasApify ? `rising: meets RISING floor. Max 1-2 per refresh.` : `rising: skip (no Apify).`}
 - seasonal: calendar-anchored. hard_date in next 60 days (ISO 8601).
 
 RULES
-- Ground EVERY idea in a tool result — no invented stats, handles, or hashtags.
+- Ground EVERY idea in a tool result with the source_refs fields required by the EVIDENCE FLOORS above. Missing a required field = the idea is rejected at insert time.
 - title: specific + recordable ("Cover Hotel California — acoustic vs classical").
 - hook: actual first spoken/shown line.
 - format: short ("acoustic vs classical comparison").
-- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies (same format/hook/topic), the rationale MUST cite it by title + verdict.` : ""}
+- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies (same format/hook/topic), the rationale MUST cite it by title + verdict.` : ""}${hasFeedback ? `
+- If a recent feedback rejection above mentions a similar format / hook / topic / trend — do NOT regenerate that idea. The creator has already told us why it fails. If proposing a deliberately differentiated take, cite the rejection by title in the rationale and explain the differentiation.` : ""}
 - saturation_warning: short string only when you saw the SPECIFIC format with saturation signals; else null.
 
 SCRIPT (one beat per line, timestamps, all cues explicit)
@@ -353,16 +432,17 @@ function youtubePrompt(
   count: number,
   today: string,
   recentReviews: RecentReview[] = [],
+  recentFeedback: RecentFeedback[] = [],
   preferences: string | null = null,
 ): string {
   const hasReviews = recentReviews.length > 0;
-  return `You are a YouTube content strategist. Produce exactly ${count} fresh video ideas as a JSON object. Each idea is EITHER a Short (≤60s) or a long-form video (typically 3-15min) — you decide per idea based on what fits the topic AND the creator's upload mix.
+  return `You are a YouTube content strategist. Produce UP TO ${count} fresh video ideas as a JSON object. Each idea is EITHER a Short (≤60s) or a long-form video (typically 3-15min) — you decide per idea based on what fits the topic AND the creator's upload mix. Quality > quantity — if signal is genuinely thin, return fewer ideas with strong evidence rather than ${count} with two fudged.
 
 OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
 ${describeYouTubeAvailable()}
-${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
+${reviewsBlock(recentReviews)}${feedbackBlock(recentFeedback)}${preferencesBlock(preferences)}
 
 PROCEDURE
 1. youtube_get_my_channel — anchor "my channel". Note subs + upload cadence.
@@ -371,7 +451,8 @@ PROCEDURE
 4. youtube_search_niche with queries from step-2 title-keywords (order=viewCount, published_after_days=30). Capture: high-view recent videos, common title hooks, non-user channels. 2-3 distinct queries.
 5. For the most engaging recent video in step 4, youtube_get_video_comments for audience questions.
 6. list_my_analytics_uploads — any YT Studio CSV.
-7. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.
+7. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.${recentFeedback.length > 0 ? `
+8. If you're about to pitch a kind=trend, kind=rising, or kind=competitor idea about a topic similar to anything in the feedback block above, call video_ideas_find_recent_feedback(kind: 'trend' | 'rising' | 'competitor') to confirm whether the creator has already rejected this exact angle. If yes — pick a different angle or downgrade to pattern.` : ""}
 
 FORMAT MIX
 Match the creator's actual mix from step 2. Examples:
@@ -380,15 +461,48 @@ Match the creator's actual mix from step 2. Examples:
 - 60/40 mix → roughly 60% short, 40% long.
 Pick the format per idea based on (a) the channel's mix, and (b) what the topic genuinely fits — a deep tutorial belongs in long-form even on a Shorts-heavy channel.
 
-KINDS
+EVIDENCE FLOORS — HARD RULES (not aspirational)
+
+Before committing to any non-pattern, non-seasonal idea, check the floor below. If you can't clear it, in order of preference:
+  (1) Downgrade to kind="pattern" and ground in the creator's own top performers instead.
+  (2) Drop the idea and produce fewer than ${count} total. Honest under-delivery beats fabricated signal.
+  (3) Replace with a different idea that DOES clear the floor.
+
+Compute USER_MEDIAN_VIEWS = median statistics.viewCount across the top-10 most-viewed videos from step 2 (youtube_list_my_videos).
+
+COMPETITOR floor:
+- competitor_video.viewCount >= 0.5 × USER_MEDIAN_VIEWS
+- competitor channel subscribers (from search result or channel lookup) >= 1000
+- Required source_refs: {competitor_channel, competitor_video_url, competitor_video_views, competitor_subscribers, user_median_views}
+
+TREND floor:
+- Sample is from the last 14 days AND sample.viewCount >= 0.5 × USER_MEDIAN_VIEWS
+- Required source_refs: {query, sample_url, sample_views, sample_published_at}
+
+RISING floor:
+- velocity_ratio = (top viewCount last 3-7d) / (top viewCount prior 7-14d) >= 1.5 for the same query
+- Required source_refs: {query, recent_window_top_views, prior_window_top_views, velocity_ratio}
+- Below 1.5 → call it trend (if it clears trend floor) or skip.
+
+NICHE-SEARCH FILTERING for competitor selection:
+After youtube_search_niche returns N rows:
+  (a) Sort by viewCount descending.
+  (b) Compute the median viewCount across the returned set; the "top half" is anything >= that median.
+  (c) ONLY consider videos in the top half as competitor candidates.
+  (d) ALSO require viewCount >= 0.5 × USER_MEDIAN_VIEWS per the competitor floor.
+
+HONEST UNDER-DELIVERY:
+Default target is ${count} but the caller accepts FEWER. If signal is thin (small back-catalogue, weak niche-search results), produce fewer ideas with high confidence rather than ${count} with two fudged. Never invent a stat, channel, or query to hit ${count}.
+
+KINDS (subject to evidence floors above)
 - pattern: source_refs={source_video_id, title}. Extrapolate from a top video.
-- competitor: source_refs={competitor_channel, competitor_video_url}. Angle they nailed and user hasn't.
-- trend: source_refs={query, example_url}. Currently surging in YT Search/Browse.
-- rising: trend + explicit velocity (last 3-7d outperforming prior 7-14d for same query). Max 1-2 per refresh.
+- competitor: meets COMPETITOR floor. Angle they nailed and user hasn't.
+- trend: meets TREND floor. Currently surging in YT Search/Browse.
+- rising: meets RISING floor. Max 1-2 per refresh.
 - seasonal: hard_date (ISO 8601), next 60 days only.
 
 RULES
-- Ground EVERY idea in a tool result — no invented stats, channels, or queries.
+- Ground EVERY idea in a tool result with the source_refs fields required by the EVIDENCE FLOORS above. Missing a required field = the idea is rejected at insert time.
 - title:
   • Short → search-keyword-optimised + clickable. Front-load the keyword ("Beginner Fingerstyle Riff in 30 Seconds").
   • Long → CTR-optimised — curiosity gap + clear value prop ("I Tried Every Fingerstyle Technique So You Don't Have To"). Title is half the battle on long-form because the algo weighs CTR heavily.
@@ -396,7 +510,8 @@ RULES
   • Short → actual first 1-2s (spoken + on-screen). Retention dies fast.
   • Long → first 30-45s. State the payoff up front then tease the reveal — viewers decide to commit by the 30s mark.
 - format: short ("comparison demo", "deep-dive tutorial").
-- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies, the rationale MUST cite it by title + verdict.` : ""}
+- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies, the rationale MUST cite it by title + verdict.` : ""}${recentFeedback.length > 0 ? `
+- If a recent feedback rejection above mentions a similar format / hook / topic — do NOT regenerate that idea. Cite the rejection by title in the rationale if proposing a deliberately differentiated take.` : ""}
 - saturation_warning: only when you saw the SPECIFIC format saturating; else null.
 
 SCRIPT — pick the structure that matches video_format:
@@ -479,17 +594,18 @@ function instagramPrompt(
   today: string,
   connected: string[],
   recentReviews: RecentReview[] = [],
+  recentFeedback: RecentFeedback[] = [],
   preferences: string | null = null,
 ): string {
   const hasApify = connected.includes("apify");
   const hasReviews = recentReviews.length > 0;
-  return `You are an Instagram Reels content strategist. Produce exactly ${count} fresh Reels ideas as a JSON object.
+  return `You are an Instagram Reels content strategist. Produce UP TO ${count} fresh Reels ideas as a JSON object. Quality > quantity — if signal is genuinely thin, return fewer ideas with strong evidence rather than ${count} with two fudged.
 
 OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no "Here are the ideas", no analysis preamble, no markdown headers, no code fence, no clarifying questions, no offers to split the work. The response must START with the literal character \`{\` and END with \`}\`. If the request is ambiguous, pick the most reasonable interpretation from the tool data and proceed — never ask the user. The schema is at the bottom of this message — follow it exactly.
 
 Today is ${today}. Tools:
 ${describeInstagramAvailable(connected)}
-${reviewsBlock(recentReviews)}${preferencesBlock(preferences)}
+${reviewsBlock(recentReviews)}${feedbackBlock(recentFeedback)}${preferencesBlock(preferences)}
 
 PROCEDURE
 1. instagram_get_my_account — anchor "my account". Note followers + bio.
@@ -502,21 +618,55 @@ ${hasApify ? `6. Extract the creator's most-recurring 2-3 hashtags from step 2. 
    (b) 3-5 distinct non-user authors → competitors;
    (c) SATURATION: many recent posts with engagement clearly below niche median → flag in saturation_warning.
 7. For 1-2 of those competitor handles, instagram_get_profile (posts_limit 10).
-8. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.` : `6. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.`}
+8. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.` : `6. For EACH idea you're seriously considering, call video_ideas_find_similar_reviews with that idea's format (and kind if you've decided). Use the returned post-mortems' Takeaways to either refine the idea or drop it if past attempts at the same format clearly flopped. SKIP only when the back catalogue genuinely has no similar work yet.`}${recentFeedback.length > 0 ? `
+9. If you're about to pitch a kind=trend, kind=rising, or kind=competitor idea about a topic similar to anything in the feedback block above, call video_ideas_find_recent_feedback(kind: 'trend' | 'rising' | 'competitor') to confirm whether the creator has already rejected this exact angle. If yes — pick a different angle or downgrade to pattern.` : ""}
 
-KINDS
+EVIDENCE FLOORS — HARD RULES (not aspirational)
+
+Before committing to any non-pattern, non-seasonal idea, check the floor below. If you can't clear it, in order of preference:
+  (1) Downgrade to kind="pattern" and ground in the creator's own top Reels instead.
+  (2) Drop the idea and produce fewer than ${count} total. Honest under-delivery beats fabricated signal.
+  (3) Replace with a different idea that DOES clear the floor.
+
+Compute USER_MEDIAN_PLAYS = median play count (or like_count when plays unavailable) across the top-10 best-performing recent Reels from step 2.
+
+COMPETITOR floor:
+- competitor_post.likesCount (or playCount when available) >= 0.5 × USER_MEDIAN_PLAYS
+- Required source_refs: {competitor_username, competitor_post_url, competitor_post_plays, user_median_plays}
+
+TREND floor:
+- Sample is from the last 14 days AND sample plays/likes >= 0.5 × USER_MEDIAN_PLAYS
+- Required source_refs: {hashtag, sample_url, sample_plays, sample_timestamp}
+
+RISING floor:
+- velocity_ratio = (top plays/likes last 3-7d) / (top plays/likes prior 7-14d) >= 1.5
+- Required source_refs: {hashtag, recent_window_top_plays, prior_window_top_plays, velocity_ratio}
+- Below 1.5 → call it trend (if it clears trend floor) or skip.
+
+HASHTAG-SEARCH FILTERING for competitor selection (when Apify is connected):
+After instagram_search_hashtag returns N rows:
+  (a) Sort by likesCount (or playCount if present) descending.
+  (b) Compute the median across the returned set; the "top half" is anything >= that median.
+  (c) ONLY consider posts in the top half as competitor candidates.
+  (d) ALSO require plays/likes >= 0.5 × USER_MEDIAN_PLAYS per the competitor floor.
+
+HONEST UNDER-DELIVERY:
+Default target is ${count} but the caller accepts FEWER. If signal is thin (no Apify, small back-catalogue, weak hashtag results), produce fewer ideas with high confidence rather than ${count} with two fudged. Never invent a stat or handle to hit ${count}.
+
+KINDS (subject to evidence floors above)
 - pattern: source_refs={source_media_id, permalink}. Extrapolate from a top Reel.
-- ${hasApify ? `competitor: source_refs={competitor_username, competitor_post_url}. Something they nailed and the user hasn't.` : `competitor: SKIP unless a post-mortem above cites one (no Apify connected).`}
-- ${hasApify ? `trend: source_refs={hashtag, sample_url}. Currently visible in the niche, not yet saturated.` : `trend: only if user's own insights show a format clearly gaining (e.g. carousels up vs Reels). Cite the evidence.`}
-- ${hasApify ? `rising: velocity ACCELERATING last 3-7d. source_refs must include velocity_note. Max 1-2 per refresh.` : `rising: SKIP unless user's engagement clearly accelerating on a specific format. Max 0-1 per refresh.`}
+- ${hasApify ? `competitor: meets COMPETITOR floor. Something they nailed and the user hasn't.` : `competitor: SKIP unless a post-mortem above cites one (no Apify connected).`}
+- ${hasApify ? `trend: meets TREND floor. Currently visible in the niche.` : `trend: only if user's own insights show a format clearly gaining. Cite the evidence.`}
+- ${hasApify ? `rising: meets RISING floor. Max 1-2 per refresh.` : `rising: SKIP unless user's engagement clearly accelerating on a specific format. Max 0-1 per refresh.`}
 - seasonal: hard_date (ISO 8601), next 60 days only.
 
 RULES
-- Ground EVERY idea in a tool result — no invented stats or competitors.
+- Ground EVERY idea in a tool result with the source_refs fields required by the EVIDENCE FLOORS above. Missing a required field = the idea is rejected at insert time.
 - title: specific + recordable.
 - hook: actual first 1-2s — both spoken AND first on-screen text frame (IG viewers scroll on mute).
 - format: short ("save-worthy carousel cover", "tutorial Reel").
-- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies, cite it by title + verdict.` : ""}
+- rationale: 1-2 sentences citing specific evidence.${hasReviews ? ` When a post-mortem above applies, cite it by title + verdict.` : ""}${recentFeedback.length > 0 ? `
+- If a recent feedback rejection above mentions a similar format / hook / topic — do NOT regenerate that idea. Cite the rejection by title in the rationale if proposing a deliberately differentiated take.` : ""}
 - saturation_warning: only when user's own insights show saturation; else null.
 
 SCRIPT (timestamps, all cues, max 90s — sweet spot 25-45s)
@@ -634,24 +784,40 @@ export async function runVideoIdeasAgent({
     };
   }
 
-  // buildToolsForIntegrations unconditionally bundles the chat-agent's
-  // CRUD tools for managing video_ideas (list/create/update/etc.) AND
+  // buildToolsForIntegrations bundles the chat-agent's CRUD tools for
+  // managing video_ideas (list/create/update/etc.) AND
   // video_ideas_list_accounts. The generator must NOT see those —
   // video_ideas_list_accounts in particular lets the model enumerate
   // every account the user has, which prompts it to ask clarifying
   // questions like "which account am I generating for, sungminlee or
-  // Hammy?" instead of producing JSON. Strip the entire CRUD set
-  // here; the generator only needs research + uploads tools.
-  const VIDEO_IDEAS_CRUD_PREFIX = "video_ideas_";
+  // Hammy?" instead of producing JSON.
+  //
+  // Whitelist by exact name (not prefix) so future research tools
+  // added under the `video_ideas_` prefix don't get accidentally
+  // stripped — the previous prefix-based strip ate
+  // video_ideas_find_similar_reviews and forced a noisy re-mount.
+  const VIDEO_IDEAS_CRUD_TOOLS = new Set([
+    "video_ideas_list_accounts",
+    "video_ideas_list",
+    "video_ideas_get",
+    "video_ideas_create",
+    "video_ideas_update",
+    "video_ideas_set_status",
+    "video_ideas_delete",
+    "video_ideas_mark_posted",
+    "video_ideas_evaluate",
+    "video_ideas_run_review",
+  ]);
   const tools: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(rawTools)) {
-    if (name.startsWith(VIDEO_IDEAS_CRUD_PREFIX)) continue;
+    if (VIDEO_IDEAS_CRUD_TOOLS.has(name)) continue;
     tools[name] = value;
   }
 
-  // Add the targeted-review retrieval tool. Scoped to this exact
-  // integration so the agent can ask "show me past comparison-format
-  // hits for this account" without leaking cross-account history.
+  // Mount the per-idea research tools (find_similar_reviews +
+  // find_recent_feedback) — these are NOT part of
+  // buildToolsForIntegrations because they need to be scoped to the
+  // specific integration being refreshed for, not the user globally.
   Object.assign(
     tools,
     buildVideoIdeasResearchTools(supabase, userId, integrationId),
@@ -726,6 +892,42 @@ export async function runVideoIdeasAgent({
     console.error("[video-ideas-agent] failed to load recent reviews:", err);
   }
 
+  // Recent thumbs-down rejections for this account. Loaded with the
+  // same pattern as recentReviews — denormalised columns on the
+  // feedback row survive the parent idea's deletion (dismissal +
+  // page-load prune).
+  const recentFeedback: RecentFeedback[] = [];
+  try {
+    const { data: feedbackRows } = await supabase
+      .from("video_idea_feedback")
+      .select(
+        "idea_title, idea_kind, idea_format, idea_hook, reason_code, free_text",
+      )
+      .eq("user_id", userId)
+      .eq("integration_id", integrationId)
+      .order("created_at", { ascending: false })
+      .limit(15);
+    for (const row of (feedbackRows ?? []) as Array<{
+      idea_title: string;
+      idea_kind: string;
+      idea_format: string | null;
+      idea_hook: string | null;
+      reason_code: string;
+      free_text: string | null;
+    }>) {
+      recentFeedback.push({
+        title: row.idea_title,
+        kind: row.idea_kind,
+        format: row.idea_format,
+        hook: row.idea_hook,
+        reason_code: row.reason_code,
+        free_text: row.free_text,
+      });
+    }
+  } catch (err) {
+    console.error("[video-ideas-agent] failed to load recent feedback:", err);
+  }
+
   // Per-account preferences (free-text constraints the creator set).
   let preferences: string | null = null;
   try {
@@ -749,15 +951,29 @@ export async function runVideoIdeasAgent({
   void targetPlatforms;
   let system: string;
   if (integration.provider === "youtube") {
-    system = youtubePrompt(count, today, recentReviews, preferences);
+    system = youtubePrompt(
+      count,
+      today,
+      recentReviews,
+      recentFeedback,
+      preferences,
+    );
   } else if (integration.provider === "instagram") {
-    system = instagramPrompt(count, today, connected, recentReviews, preferences);
+    system = instagramPrompt(
+      count,
+      today,
+      connected,
+      recentReviews,
+      recentFeedback,
+      preferences,
+    );
   } else {
     system = tiktokPrompt(
       count,
       today,
       connected,
       recentReviews,
+      recentFeedback,
       preferences,
       [integration.provider],
     );

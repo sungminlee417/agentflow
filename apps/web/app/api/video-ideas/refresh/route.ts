@@ -34,6 +34,7 @@ const TOOL_LABELS: Record<string, string> = {
   list_my_analytics_uploads: "Reading your uploaded analytics",
   get_analytics_upload: "Reading an analytics file",
   video_ideas_find_similar_reviews: "Pulling lessons from similar past posts",
+  video_ideas_find_recent_feedback: "Checking what you've rejected before",
   youtube_get_my_channel: "Reading your YouTube channel",
   youtube_list_my_videos: "Reading your recent YouTube videos",
   youtube_get_video_analytics: "Pulling YouTube Analytics for a video",
