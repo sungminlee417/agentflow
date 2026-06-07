@@ -1,9 +1,17 @@
 import { tool } from "ai";
 import { z } from "zod";
+import {
+  describeAccounts,
+  resolveAccount,
+  type ProviderAccount,
+} from "./account-resolver";
 
 // YouTube tools. Use the Data API v3 for content + the Analytics API
 // for engagement metrics. Authenticated calls use the user's OAuth
 // token (Bearer).
+//
+// Multi-account: builder takes ALL connected YouTube accounts and each
+// tool resolves which one to use via the `account` input parameter.
 
 async function yt(token: string, path: string): Promise<unknown> {
   const url = path.startsWith("http")
@@ -41,13 +49,37 @@ async function ytAnalytics(
   return text ? JSON.parse(text) : null;
 }
 
-export function buildYouTubeTools(token: string) {
+// Lowercase to keep the param description identical across providers.
+const ACCOUNT_PARAM_DESC =
+  "Which connected YouTube account to use. Optional if only one is connected; required when multiple. Call youtube_list_my_accounts first if you're unsure.";
+
+export function buildYouTubeTools(accounts: ProviderAccount[]) {
+  if (accounts.length === 0) return {};
+
+  const accountField = z
+    .string()
+    .optional()
+    .describe(ACCOUNT_PARAM_DESC);
+
+  async function tokenFor(account: string | undefined): Promise<string> {
+    const acct = resolveAccount(accounts, account, "youtube");
+    return acct.getToken();
+  }
+
   return {
+    youtube_list_my_accounts: tool({
+      description:
+        "List every YouTube account connected to this user. Returns [{ id, label, handle }]. ALWAYS call this first when multiple YouTube accounts may be connected, then pass `label` as the `account` argument to other youtube_* tools.",
+      inputSchema: z.object({}),
+      execute: async () => describeAccounts(accounts),
+    }),
+
     youtube_get_my_channel: tool({
       description:
         "Authenticated user's channel: id, title, subscriber/view/video counts. Call once to anchor 'my channel'.",
-      inputSchema: z.object({}),
-      execute: async () => {
+      inputSchema: z.object({ account: accountField }),
+      execute: async ({ account }) => {
+        const token = await tokenFor(account);
         const data = (await yt(
           token,
           "/channels?part=snippet,statistics,contentDetails&mine=true",
@@ -92,9 +124,11 @@ export function buildYouTubeTools(token: string) {
       description:
         "User's most recent uploads. Returns id, title, description, publishedAt, thumbnail, tags, duration, stats (views/likes/comments).",
       inputSchema: z.object({
+        account: accountField,
         limit: z.number().int().min(1).max(50).default(20),
       }),
-      execute: async ({ limit }) => {
+      execute: async ({ account, limit }) => {
+        const token = await tokenFor(account);
         // 1. Find the uploads playlist id.
         const channels = (await yt(
           token,
@@ -162,6 +196,7 @@ export function buildYouTubeTools(token: string) {
       description:
         "Per-video Analytics API metrics: views, watch time, avg view duration, avg view %, likes, subscribers gained, CTR. The real performance picture beyond public counts.",
       inputSchema: z.object({
+        account: accountField,
         video_id: z.string(),
         start_date: z
           .string()
@@ -174,7 +209,8 @@ export function buildYouTubeTools(token: string) {
           .optional()
           .describe("YYYY-MM-DD. Defaults to today."),
       }),
-      execute: async ({ video_id, start_date, end_date }) => {
+      execute: async ({ account, video_id, start_date, end_date }) => {
+        const token = await tokenFor(account);
         const end = end_date ?? new Date().toISOString().slice(0, 10);
         const startDefault = new Date(Date.now() - 90 * 86_400_000)
           .toISOString()
@@ -205,10 +241,12 @@ export function buildYouTubeTools(token: string) {
       description:
         "Traffic-source breakdown for a video (Search vs Suggested vs Browse vs External). Rows of { source, views, watch_time_minutes }.",
       inputSchema: z.object({
+        account: accountField,
         video_id: z.string(),
         days: z.number().int().min(1).max(365).default(28),
       }),
-      execute: async ({ video_id, days }) => {
+      execute: async ({ account, video_id, days }) => {
+        const token = await tokenFor(account);
         const end = new Date().toISOString().slice(0, 10);
         const start = new Date(Date.now() - days * 86_400_000)
           .toISOString()
@@ -234,6 +272,7 @@ export function buildYouTubeTools(token: string) {
       description:
         "Search YouTube by query — discover niche/competitor videos. Returns id, title, channel, publishedAt, views, likes.",
       inputSchema: z.object({
+        account: accountField,
         query: z.string(),
         max_results: z.number().int().min(1).max(50).default(15),
         published_after_days: z.number().int().min(1).max(3650).default(30),
@@ -241,7 +280,8 @@ export function buildYouTubeTools(token: string) {
           .enum(["relevance", "date", "rating", "viewCount", "title"])
           .default("relevance"),
       }),
-      execute: async ({ query, max_results, published_after_days, order }) => {
+      execute: async ({ account, query, max_results, published_after_days, order }) => {
+        const token = await tokenFor(account);
         const publishedAfter = new Date(
           Date.now() - published_after_days * 86_400_000,
         ).toISOString();
@@ -304,10 +344,12 @@ export function buildYouTubeTools(token: string) {
       description:
         "Top-level comments on a video — audience sentiment + common questions.",
       inputSchema: z.object({
+        account: accountField,
         video_id: z.string(),
         limit: z.number().int().min(1).max(100).default(20),
       }),
-      execute: async ({ video_id, limit }) => {
+      execute: async ({ account, video_id, limit }) => {
+        const token = await tokenFor(account);
         const data = (await yt(
           token,
           `/commentThreads?part=snippet&videoId=${video_id}&maxResults=${limit}&order=relevance`,
@@ -340,4 +382,3 @@ export function buildYouTubeTools(token: string) {
     }),
   };
 }
-

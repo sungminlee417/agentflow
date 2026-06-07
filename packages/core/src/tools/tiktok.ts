@@ -1,11 +1,19 @@
 import { tool } from "ai";
 import { z } from "zod";
+import {
+  describeAccounts,
+  resolveAccount,
+  type ProviderAccount,
+} from "./account-resolver";
 
 // TikTok Display API tools. Read-only; works in Sandbox mode with
 // audited test users. Posting is in the Content Posting API which
 // requires app review for non-private posts.
 //
 // Endpoint base: https://open.tiktokapis.com/v2
+//
+// Multi-account: builder takes ALL connected TikTok accounts and each
+// tool resolves which one to use via the `account` input parameter.
 
 async function tt(
   token: string,
@@ -46,13 +54,33 @@ const VIDEO_FIELDS = [
   "embed_link",
 ];
 
-export function buildTikTokTools(token: string) {
+const ACCOUNT_PARAM_DESC =
+  "Which connected TikTok account to use. Optional if only one is connected; required when multiple. Call tiktok_list_my_accounts first if you're unsure.";
+
+export function buildTikTokTools(accounts: ProviderAccount[]) {
+  if (accounts.length === 0) return {};
+
+  const accountField = z.string().optional().describe(ACCOUNT_PARAM_DESC);
+
+  async function tokenFor(account: string | undefined): Promise<string> {
+    const acct = resolveAccount(accounts, account, "tiktok");
+    return acct.getToken();
+  }
+
   return {
+    tiktok_list_my_accounts: tool({
+      description:
+        "List every TikTok account connected to this user. Returns [{ id, label, handle }]. ALWAYS call this first when multiple TikTok accounts may be connected, then pass `label` as the `account` argument to other tiktok_* tools.",
+      inputSchema: z.object({}),
+      execute: async () => describeAccounts(accounts),
+    }),
+
     tiktok_get_my_profile: tool({
       description:
         "Get the authenticated TikTok user's basic profile: display name, follower / following / likes / video counts, bio, avatar.",
-      inputSchema: z.object({}),
-      execute: async () => {
+      inputSchema: z.object({ account: accountField }),
+      execute: async ({ account }) => {
+        const token = await tokenFor(account);
         const data = (await tt(token, "/user/info/", {
           query: {
             fields:
@@ -67,9 +95,11 @@ export function buildTikTokTools(token: string) {
       description:
         "List the authenticated TikTok user's videos with stats (views, likes, comments, shares) and metadata (title, caption, duration). Returns up to `max_count` items.",
       inputSchema: z.object({
+        account: accountField,
         max_count: z.number().int().min(1).max(20).default(20),
       }),
-      execute: async ({ max_count }) => {
+      execute: async ({ account, max_count }) => {
+        const token = await tokenFor(account);
         const data = (await tt(token, "/video/list/", {
           method: "POST",
           query: { fields: VIDEO_FIELDS.join(",") },
@@ -92,10 +122,12 @@ export function buildTikTokTools(token: string) {
       description:
         "Surface the authenticated TikTok user's best-performing videos by engagement rate (likes ÷ views) across their recent history. Pages through up to `from_history` videos server-side, ranks them, returns the top `top_n`. Use this to find what's actually worked for the creator over time (versus tiktok_list_my_videos which only gives you the most recent chronological slice).",
       inputSchema: z.object({
+        account: accountField,
         top_n: z.number().int().min(1).max(20).default(10),
         from_history: z.number().int().min(20).max(200).default(100),
       }),
-      execute: async ({ top_n, from_history }) => {
+      execute: async ({ account, top_n, from_history }) => {
+        const token = await tokenFor(account);
         const pageSize = 20; // TikTok's per-call max
         const collected: Array<Record<string, unknown>> = [];
         let cursor: number | undefined;
@@ -154,9 +186,11 @@ export function buildTikTokTools(token: string) {
       description:
         "Look up specific TikTok videos by id, returning full stats + metadata. Use after tiktok_list_my_videos to enrich a subset.",
       inputSchema: z.object({
+        account: accountField,
         video_ids: z.array(z.string()).min(1).max(20),
       }),
-      execute: async ({ video_ids }) => {
+      execute: async ({ account, video_ids }) => {
+        const token = await tokenFor(account);
         const data = (await tt(token, "/video/query/", {
           method: "POST",
           query: { fields: VIDEO_FIELDS.join(",") },
@@ -167,4 +201,3 @@ export function buildTikTokTools(token: string) {
     }),
   };
 }
-

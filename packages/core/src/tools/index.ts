@@ -11,19 +11,25 @@ import { buildApifyInstagramTools } from "./apify-instagram";
 import { buildUploadsTools } from "./uploads";
 import { buildTranscriptionTools, loadOpenAIKey } from "./transcription";
 import { buildVideoIdeasTools } from "./video-ideas";
+import type { ProviderAccount } from "./account-resolver";
 
 // Compose the agent's tool set from connected integrations + service
 // keys + uploads. Multi-account aware: a user may have several
-// integrations for the same provider (e.g. two TikTok accounts).
+// integrations for the same provider (e.g. two YouTube channels). Each
+// refreshable-provider tool family is built ONCE with the full list of
+// connected accounts and tools route to the right one via an `account`
+// input parameter (see ./account-resolver.ts).
 //
 // Two entrypoints:
-//   buildToolsForUser     — picks one integration per provider (the
-//                           oldest by created_at). Used by chat,
-//                           briefs, and scripts where there's no
-//                           explicit account selection yet.
+//   buildToolsForUser     — every connected integration the user has.
+//                           Used by chat where the agent decides which
+//                           account to query (via *_list_my_accounts).
 //   buildToolsForIntegrations — builds tools for a specific list of
 //                           integration rows. Used by /video-ideas
-//                           which is account-aware.
+//                           which is already account-scoped per agent
+//                           run; the resulting tool set will have one
+//                           ProviderAccount per provider and the agent
+//                           can omit the `account` param.
 //
 // User-level extras (Apify, Whisper, uploads) are always added on
 // top — they're not OAuth-scoped.
@@ -40,10 +46,15 @@ export type IntegrationRow = {
   encrypted_access_token: string;
   encrypted_refresh_token: string | null;
   expires_at: string | null;
+  // Multi-account labeling. Populated at OAuth callback time when
+  // available; null on older rows.
+  handle?: string | null;
+  display_name?: string | null;
+  account_label?: string | null;
 };
 
 const INTEGRATION_SELECT =
-  "id, provider, encrypted_access_token, encrypted_refresh_token, expires_at, created_at";
+  "id, provider, encrypted_access_token, encrypted_refresh_token, expires_at, handle, display_name, account_label, created_at";
 
 export async function buildToolsForUser(
   supabase: SupabaseClient,
@@ -55,14 +66,55 @@ export async function buildToolsForUser(
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
 
-  // Pick the oldest integration per provider — deterministic default
-  // when multiple accounts exist for the same provider.
-  const byProvider = new Map<string, IntegrationRow>();
-  for (const row of (integrations ?? []) as IntegrationRow[]) {
-    if (!byProvider.has(row.provider)) byProvider.set(row.provider, row);
-  }
+  // Pass ALL rows through — refreshable-provider builders now route
+  // per account via the `account` parameter, so we no longer want to
+  // dedupe down to one integration per provider.
+  return buildToolsForIntegrations(
+    supabase,
+    userId,
+    (integrations ?? []) as IntegrationRow[],
+  );
+}
 
-  return buildToolsForIntegrations(supabase, userId, [...byProvider.values()]);
+function labelFor(row: IntegrationRow): string {
+  return (
+    row.account_label?.trim() ||
+    row.display_name?.trim() ||
+    row.handle?.trim() ||
+    `${row.provider} (${row.id.slice(0, 8)})`
+  );
+}
+
+// Build a ProviderAccount with a memoized lazy token fetcher. The
+// refresh happens at most once per chat-request lifetime, regardless
+// of how many tool calls hit the same account.
+function makeProviderAccount(
+  supabase: SupabaseClient,
+  userId: string,
+  row: IntegrationRow,
+): ProviderAccount {
+  let cached: Promise<string> | null = null;
+  return {
+    id: row.id,
+    label: labelFor(row),
+    handle: row.handle ?? null,
+    getToken: () => {
+      if (!cached) {
+        cached = getFreshAccessToken(
+          supabase,
+          userId,
+          row.provider as OAuthProvider,
+          {
+            id: row.id,
+            encrypted_access_token: row.encrypted_access_token,
+            encrypted_refresh_token: row.encrypted_refresh_token,
+            expires_at: row.expires_at,
+          },
+        );
+      }
+      return cached;
+    },
+  };
 }
 
 export async function buildToolsForIntegrations(
@@ -73,39 +125,55 @@ export async function buildToolsForIntegrations(
   const tools: Record<string, unknown> = {};
   const connected: string[] = [];
 
+  // Group by provider so refreshable-provider builders see ALL accounts
+  // for their provider at once.
+  const byProvider = new Map<string, IntegrationRow[]>();
+  const nonRefreshable: IntegrationRow[] = [];
   for (const i of integrations) {
     if (!i.encrypted_access_token) continue;
-    try {
-      const provider = i.provider;
-      const token = REFRESHABLE_PROVIDERS.has(provider as OAuthProvider)
-        ? await getFreshAccessToken(supabase, userId, provider as OAuthProvider, {
-            // The id is what scopes the post-refresh UPDATE to THIS
-            // row. Without it the refresh writes the new token into
-            // every integration the user has for the provider, which
-            // cross-contaminates accounts when multiple are connected.
-            id: i.id,
-            encrypted_access_token: i.encrypted_access_token,
-            encrypted_refresh_token: i.encrypted_refresh_token,
-            expires_at: i.expires_at,
-          })
-        : decrypt(i.encrypted_access_token);
+    if (REFRESHABLE_PROVIDERS.has(i.provider as OAuthProvider)) {
+      const arr = byProvider.get(i.provider) ?? [];
+      arr.push(i);
+      byProvider.set(i.provider, arr);
+    } else {
+      nonRefreshable.push(i);
+    }
+  }
 
+  for (const [provider, rows] of byProvider) {
+    const accounts = rows.map((r) => makeProviderAccount(supabase, userId, r));
+    try {
       switch (provider) {
-        case "github":
-          Object.assign(tools, buildGitHubTools(token));
-          connected.push("github");
-          break;
         case "youtube":
-          Object.assign(tools, buildYouTubeTools(token));
+          Object.assign(tools, buildYouTubeTools(accounts));
           connected.push("youtube");
           break;
         case "tiktok":
-          Object.assign(tools, buildTikTokTools(token));
+          Object.assign(tools, buildTikTokTools(accounts));
           connected.push("tiktok");
           break;
         case "instagram":
-          Object.assign(tools, buildInstagramTools(token));
+          Object.assign(tools, buildInstagramTools(accounts));
           connected.push("instagram");
+          break;
+      }
+    } catch (err) {
+      console.error(
+        `Failed to prepare ${provider} tools for user ${userId}:`,
+        err,
+      );
+    }
+  }
+
+  // Non-refreshable providers (GitHub) keep the one-token-per-row
+  // shape — they don't have a refresh ceremony to share across calls.
+  for (const i of nonRefreshable) {
+    try {
+      const token = decrypt(i.encrypted_access_token);
+      switch (i.provider) {
+        case "github":
+          Object.assign(tools, buildGitHubTools(token));
+          connected.push("github");
           break;
       }
     } catch (err) {

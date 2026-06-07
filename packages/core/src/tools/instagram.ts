@@ -1,5 +1,10 @@
 import { tool } from "ai";
 import { z } from "zod";
+import {
+  describeAccounts,
+  resolveAccount,
+  type ProviderAccount,
+} from "./account-resolver";
 
 // Instagram Graph API tools (via Instagram Login). Read-only operations
 // + comment replies. The user's connected account must be a Business
@@ -7,6 +12,9 @@ import { z } from "zod";
 // 2024 deprecation of Basic Display.
 //
 // Endpoint base: https://graph.instagram.com (Instagram-Login flow)
+//
+// Multi-account: builder takes ALL connected IG accounts and each tool
+// resolves which one to use via the `account` input parameter.
 
 async function ig(
   token: string,
@@ -32,13 +40,33 @@ async function ig(
   return text ? JSON.parse(text) : null;
 }
 
-export function buildInstagramTools(token: string) {
+const ACCOUNT_PARAM_DESC =
+  "Which connected Instagram account to use. Optional if only one is connected; required when multiple. Call instagram_list_my_accounts first if you're unsure.";
+
+export function buildInstagramTools(accounts: ProviderAccount[]) {
+  if (accounts.length === 0) return {};
+
+  const accountField = z.string().optional().describe(ACCOUNT_PARAM_DESC);
+
+  async function tokenFor(account: string | undefined): Promise<string> {
+    const acct = resolveAccount(accounts, account, "instagram");
+    return acct.getToken();
+  }
+
   return {
+    instagram_list_my_accounts: tool({
+      description:
+        "List every Instagram account connected to this user. Returns [{ id, label, handle }]. ALWAYS call this first when multiple Instagram accounts may be connected, then pass `label` as the `account` argument to other instagram_* tools.",
+      inputSchema: z.object({}),
+      execute: async () => describeAccounts(accounts),
+    }),
+
     instagram_get_my_account: tool({
       description:
         "Authenticated IG Business/Creator account: id, username, name, bio, follower/following/media counts.",
-      inputSchema: z.object({}),
-      execute: async () => {
+      inputSchema: z.object({ account: accountField }),
+      execute: async ({ account }) => {
+        const token = await tokenFor(account);
         return await ig(token, "/me", {
           query: {
             fields:
@@ -52,9 +80,11 @@ export function buildInstagramTools(token: string) {
       description:
         "User's recent IG media (posts, reels, carousels). Returns id, caption, media_type, permalink, timestamp, like_count, comments_count.",
       inputSchema: z.object({
+        account: accountField,
         limit: z.number().int().min(1).max(50).default(20),
       }),
-      execute: async ({ limit }) => {
+      execute: async ({ account, limit }) => {
+        const token = await tokenFor(account);
         const data = (await ig(token, "/me/media", {
           query: {
             fields:
@@ -70,9 +100,11 @@ export function buildInstagramTools(token: string) {
       description:
         "Per-media insights: reach, impressions, saved, shares, total_interactions. Real performance beyond likes.",
       inputSchema: z.object({
+        account: accountField,
         media_id: z.string(),
       }),
-      execute: async ({ media_id }) => {
+      execute: async ({ account, media_id }) => {
+        const token = await tokenFor(account);
         // The exact metric set differs by media_type; ask for the common
         // ones and let any unsupported ones error softly per-metric.
         const data = (await ig(token, `/${media_id}/insights`, {
@@ -92,9 +124,11 @@ export function buildInstagramTools(token: string) {
       description:
         "Account-level insights over N days: reach, profile_views, follower_count. Default 30d.",
       inputSchema: z.object({
+        account: accountField,
         days: z.number().int().min(1).max(90).default(30),
       }),
-      execute: async ({ days }) => {
+      execute: async ({ account, days }) => {
+        const token = await tokenFor(account);
         const until = Math.floor(Date.now() / 1000);
         const since = until - days * 86_400;
         const data = (await ig(token, "/me/insights", {
@@ -125,10 +159,12 @@ export function buildInstagramTools(token: string) {
       description:
         "Comments on a media. Returns id, text, username, timestamp, like_count.",
       inputSchema: z.object({
+        account: accountField,
         media_id: z.string(),
         limit: z.number().int().min(1).max(50).default(20),
       }),
-      execute: async ({ media_id, limit }) => {
+      execute: async ({ account, media_id, limit }) => {
+        const token = await tokenFor(account);
         const data = (await ig(token, `/${media_id}/comments`, {
           query: {
             fields: "id,text,username,timestamp,like_count",
@@ -143,10 +179,12 @@ export function buildInstagramTools(token: string) {
       description:
         "Reply to an Instagram comment. Requires the instagram_business_manage_comments scope.",
       inputSchema: z.object({
+        account: accountField,
         comment_id: z.string(),
         message: z.string().min(1).max(2200),
       }),
-      execute: async ({ comment_id, message }) => {
+      execute: async ({ account, comment_id, message }) => {
+        const token = await tokenFor(account);
         const data = (await ig(token, `/${comment_id}/replies`, {
           method: "POST",
           body: { message },
@@ -156,4 +194,3 @@ export function buildInstagramTools(token: string) {
     }),
   };
 }
-

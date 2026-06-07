@@ -24,6 +24,19 @@ function systemPromptFor(connected: string[]): string {
     "Be concise. When using tools, explain what you're about to do in one short sentence, call the tool, then describe what came back.",
     "Never invent data — if you don't know something, call a tool or ask.",
   ];
+  const hasYouTube = connected.includes("youtube");
+  const hasTikTok = connected.includes("tiktok");
+  const hasInstagram = connected.includes("instagram");
+  if (hasYouTube || hasTikTok || hasInstagram) {
+    lines.push(
+      "",
+      "Multi-account routing:",
+      "- The user may have multiple accounts connected for the same platform (e.g. two YouTube channels). Every youtube_/tiktok_/instagram_ tool now accepts an `account` parameter naming which account to use.",
+      "- BEFORE calling any platform-data tool, if you don't already know which accounts exist for that provider, call the corresponding `*_list_my_accounts` tool first. It returns [{ id, label, handle }] — use the `label` value as the `account` argument on subsequent calls.",
+      "- If the user names a specific account ('my Hammy channel'), match it to a label and pass that as `account`. If they're ambiguous and multiple accounts are connected, ask which one before proceeding.",
+      "- When the user asks about 'my videos' or 'my channel' without specifying, call the list tool first and ASK them which account they mean. Don't just default to one — they almost always want a specific one.",
+    );
+  }
   if (connected.includes("github")) {
     lines.push(
       "",
