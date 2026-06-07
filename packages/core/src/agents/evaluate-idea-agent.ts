@@ -500,5 +500,20 @@ export async function persistEvaluatedIdea(
     .single();
 
   if (error) return { ok: false, error: error.message };
-  return { ok: true, id: (data as { id: string }).id };
+  const ideaId = (data as { id: string }).id;
+  const { error: targetsErr } = await supabase
+    .from("video_idea_targets")
+    .insert({
+      idea_id: ideaId,
+      integration_id: integrationId,
+      user_id: userId,
+      is_primary: true,
+    });
+  if (targetsErr) {
+    console.error(
+      "[persistEvaluatedIdea] insert targets failed:",
+      targetsErr.message,
+    );
+  }
+  return { ok: true, id: ideaId };
 }

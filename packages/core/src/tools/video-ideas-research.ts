@@ -2,10 +2,10 @@ import { tool } from "ai";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Per-idea review retrieval. The video-ideas generator calls this
-// when it wants targeted history on a specific format/topic it's
-// considering — rather than relying on the global "latest 8" dump
-// baked into the system prompt. Two reasons this exists:
+// Per-idea review + feedback retrieval. The video-ideas generator calls
+// these when it wants targeted history on a specific format/topic it's
+// considering — rather than relying on the global "latest N" dump baked
+// into the system prompt. Two reasons this exists:
 //
 //   1. SCALE — once the back catalogue has hundreds (let alone
 //      thousands) of reviewed posts, dumping the latest N globally
@@ -18,21 +18,43 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 //      format/kind/title keywords narrows directly to relevant prior
 //      work.
 //
-// Returns up to `limit` settled reviews (skips too_early since their
-// signal is noisy). Scoped to one integration so cross-account
-// learnings don't leak between a creator's TT vs YT lanes — each
-// has its own audience.
+// Multi-account: the unified video-ideas agent sees ALL connected
+// integrations at once, so each tool takes a `target_integration_id`
+// input naming WHICH account the lookup is scoped to. Cross-account
+// learnings stay siloed (a music-TT rejection doesn't taint the
+// fitness-IG lane) but the agent can ask "what's worked for Sungmin's
+// YT?" while simultaneously planning ideas for Hammy's IG.
+//
+// The set of valid ids is captured in closure at builder time; the
+// execute path validates against it to defend against the model
+// fabricating an integration id from prompt text.
 
 export function buildVideoIdeasResearchTools(
   supabase: SupabaseClient,
   userId: string,
-  integrationId: string,
+  integrationIds: string[],
 ) {
+  const valid = new Set(integrationIds);
+
+  function assertValid(id: string): void {
+    if (!valid.has(id)) {
+      throw new Error(
+        `Unknown target_integration_id: ${id}. Valid ids: ${[...valid].join(", ") || "(none)"}.`,
+      );
+    }
+  }
+
   return {
     video_ideas_find_similar_reviews: tool({
       description:
-        "Look up post-mortems from this account's back catalogue similar to an idea you're considering. Filter by format (substring match), kind, and/or title keywords. Use BEFORE finalising any idea you're unsure about — past hits/flops on the same format are the strongest signal for whether to commit to it. Returns title, kind, format, platform, verdict (hit/on_track/underperformed), ratio vs creator's median, and the post-mortem's Takeaways section.",
+        "Look up post-mortems from ONE account's back catalogue similar to an idea you're considering. Filter by format (substring match), kind, and/or title keywords. Use BEFORE finalising any idea you're unsure about — past hits/flops on the same format are the strongest signal for whether to commit to it. Returns title, kind, format, platform, verdict (hit/on_track/underperformed), ratio vs creator's median, and the post-mortem's Takeaways section.",
       inputSchema: z.object({
+        target_integration_id: z
+          .string()
+          .uuid()
+          .describe(
+            "Which connected account this lookup is scoped to. Pass the integration_id of the account you're considering the idea FOR (not the account you're inspecting evidence ABOUT). Required.",
+          ),
         format: z
           .string()
           .optional()
@@ -51,28 +73,33 @@ export function buildVideoIdeasResearchTools(
           ),
         limit: z.number().int().min(1).max(20).default(8),
       }),
-      execute: async ({ format, kind, title_keywords, limit }) => {
+      execute: async ({
+        target_integration_id,
+        format,
+        kind,
+        title_keywords,
+        limit,
+      }) => {
+        assertValid(target_integration_id);
         let q = supabase
           .from("video_idea_posts")
           .select(
             "platform, performance_verdict, performance_stats, performance_review, last_reviewed_at, video_ideas!inner(title, kind, format)",
           )
           .eq("user_id", userId)
-          .eq("integration_id", integrationId)
+          .eq("integration_id", target_integration_id)
           .not("performance_verdict", "is", null)
           .neq("performance_verdict", "too_early")
           .order("last_reviewed_at", { ascending: false })
           .limit(limit);
 
         if (kind) {
-          // Filter via the joined idea row.
           q = q.eq("video_ideas.kind", kind);
         }
         if (format && format.trim()) {
           q = q.ilike("video_ideas.format", `%${format.trim()}%`);
         }
         if (title_keywords && title_keywords.length > 0) {
-          // OR-join multiple keyword ilikes against the idea title.
           const or = title_keywords
             .map((k) => `title.ilike.%${k.trim().replace(/[%,]/g, "")}%`)
             .join(",");
@@ -128,8 +155,14 @@ export function buildVideoIdeasResearchTools(
 
     video_ideas_find_recent_feedback: tool({
       description:
-        "Look up the creator's recent thumbs-down rejections for this account. Use BEFORE proposing any idea similar to recent rejections — past 'this won't work' signals are the strongest reason to NOT regenerate something. Returns title, kind, format, hook, reason_code (outdated_trend / wrong_voice / flopped_before / platform_wrong / off_brand / other) and the creator's free-text note when present.",
+        "Look up the creator's recent thumbs-down rejections for ONE account. Use BEFORE proposing any idea similar to recent rejections — past 'this won't work' signals are the strongest reason to NOT regenerate something. Returns title, kind, format, hook, reason_code (outdated_trend / wrong_voice / flopped_before / platform_wrong / off_brand / other) and the creator's free-text note when present.",
       inputSchema: z.object({
+        target_integration_id: z
+          .string()
+          .uuid()
+          .describe(
+            "Which connected account this lookup is scoped to. Pass the integration_id of the account you're considering the idea FOR. Required.",
+          ),
         reason_code: z
           .enum([
             "outdated_trend",
@@ -149,14 +182,15 @@ export function buildVideoIdeasResearchTools(
           .describe("Restrict to rejections of one kind."),
         limit: z.number().int().min(1).max(30).default(15),
       }),
-      execute: async ({ reason_code, kind, limit }) => {
+      execute: async ({ target_integration_id, reason_code, kind, limit }) => {
+        assertValid(target_integration_id);
         let q = supabase
           .from("video_idea_feedback")
           .select(
             "idea_title, idea_kind, idea_format, idea_hook, reason_code, free_text, created_at",
           )
           .eq("user_id", userId)
-          .eq("integration_id", integrationId)
+          .eq("integration_id", target_integration_id)
           .order("created_at", { ascending: false })
           .limit(limit);
         if (reason_code) q = q.eq("reason_code", reason_code);

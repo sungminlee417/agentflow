@@ -184,7 +184,28 @@ export function buildVideoIdeasTools(
           .single();
 
         if (error) return { ok: false, error: error.message };
-        return { ok: true, id: (data as { id: string }).id };
+        const ideaId = (data as { id: string }).id;
+
+        // Mirror the single-target into video_idea_targets so the page
+        // loader's join finds this idea. Chat-created ideas are always
+        // single-target (the chat agent operates on one account at a
+        // time); the unified /generate flow handles multi-target.
+        const { error: targetsErr } = await supabase
+          .from("video_idea_targets")
+          .insert({
+            idea_id: ideaId,
+            integration_id: args.integration_id,
+            user_id: userId,
+            is_primary: true,
+          });
+        if (targetsErr) {
+          console.error(
+            "[video_ideas_create] insert targets failed:",
+            targetsErr.message,
+          );
+        }
+
+        return { ok: true, id: ideaId };
       },
     }),
 

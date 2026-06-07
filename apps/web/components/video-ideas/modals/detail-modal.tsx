@@ -41,6 +41,7 @@ import type { IdeasAccount, VideoIdeaRow } from "../types";
 export function IdeaDetailModal({
   idea,
   account,
+  targets,
   reviewingId,
   onClose,
   onSchedule,
@@ -53,6 +54,9 @@ export function IdeaDetailModal({
 }: {
   idea: VideoIdeaRow;
   account: IdeasAccount | null;
+  /** Optional: every account this idea targets. If absent or empty,
+   *  falls back to single-account subtitle using `account`. */
+  targets?: IdeasAccount[] | null;
   reviewingId: string | null;
   onClose: () => void;
   onSchedule: () => void;
@@ -64,17 +68,25 @@ export function IdeaDetailModal({
   onReview?: (postId?: string) => void;
 }) {
   const captionTabs = useMemo(() => buildCaptionTabs(idea), [idea]);
-  const platform = (idea.provider ?? account?.provider ?? "").toLowerCase();
-  const platformLabel =
-    PLATFORM_LABELS[platform] ?? PROVIDER_LABELS[platform] ?? platform;
-  const accountLabel = account ? accountTitle(account) : "Unknown account";
+  const chipTargets: IdeasAccount[] =
+    targets && targets.length > 0 ? targets : account ? [account] : [];
+  const subtitleAccounts =
+    chipTargets.length > 0
+      ? chipTargets
+          .map((a) => {
+            const p = (a.provider ?? "").toLowerCase();
+            const pLabel = PLATFORM_LABELS[p] ?? PROVIDER_LABELS[p] ?? p;
+            return `${pLabel} · ${accountTitle(a)}`;
+          })
+          .join(" · ")
+      : `${(idea.provider ?? "").toLowerCase()} · Unknown account`;
 
   return (
     <Modal
       open={true}
       onClose={onClose}
       title={idea.title}
-      subtitle={`${platformLabel} · ${accountLabel} · ${KIND_LABELS[idea.kind]} · ${expiresLabel(idea.expires_at)}`}
+      subtitle={`${subtitleAccounts} · ${KIND_LABELS[idea.kind]} · ${expiresLabel(idea.expires_at)}`}
       maxWidth="max-w-3xl"
     >
       <div className="space-y-5">

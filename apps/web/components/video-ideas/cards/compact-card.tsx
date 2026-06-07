@@ -27,11 +27,19 @@ import type { IdeasAccount, VideoIdeaRow } from "../types";
 export function CompactIdeaCard({
   i,
   account,
+  targets,
   onOpen,
   onThumbsDown,
 }: {
   i: VideoIdeaRow;
+  /** Back-compat: the primary account. Used as the platform/account
+   *  fallback when `targets` isn't provided. */
   account: IdeasAccount | null;
+  /** Optional: the full set of accounts this idea targets. When
+   *  provided AND length > 1, renders a chip per target instead of
+   *  a single platform chip. Single-target ideas should pass `null`
+   *  (or a single-element array — same result). */
+  targets?: IdeasAccount[] | null;
   onOpen: () => void;
   onThumbsDown?: () => void;
 }) {
@@ -52,15 +60,11 @@ export function CompactIdeaCard({
     !!i.platforms?.tiktok ||
     !!i.platforms?.youtube ||
     !!i.platforms?.instagram;
-  // Platform chip + tooltip reveal the source account on hover. Keeps
-  // the row visually quiet (a single chip, not a whole account label)
-  // while still letting the user disambiguate when they have multiple
-  // accounts on the same platform.
-  const platform = (i.provider ?? account?.provider ?? "").toLowerCase();
-  const platformLabel =
-    PLATFORM_LABELS[platform] ?? PROVIDER_LABELS[platform] ?? platform;
-  const platformClass = providerChipClass(platform);
-  const accountLabel = account ? accountTitle(account) : "Unknown account";
+  // Platform chips. Multi-target ideas render one per target; the
+  // tooltip reveals the account label on hover. Single-target ideas
+  // fall back to the legacy single-chip behaviour using `account`.
+  const chipTargets: IdeasAccount[] =
+    targets && targets.length > 0 ? targets : account ? [account] : [];
   return (
     <div
       role="button"
@@ -76,12 +80,27 @@ export function CompactIdeaCard({
       className="block w-full cursor-pointer px-4 py-3 text-left transition hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
     >
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-        <span
-          className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${platformClass}`}
-          title={accountLabel}
-        >
-          {platformLabel}
-        </span>
+        {chipTargets.length === 0 && (
+          <span className="rounded-full bg-neutral-100 px-2 py-0.5 font-semibold text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+            {(i.provider ?? "").toLowerCase()}
+          </span>
+        )}
+        {chipTargets.map((a) => {
+          const platform = (a.provider ?? "").toLowerCase();
+          const platformLabel =
+            PLATFORM_LABELS[platform] ?? PROVIDER_LABELS[platform] ?? platform;
+          const platformClass = providerChipClass(platform);
+          const acctLabel = accountTitle(a);
+          return (
+            <span
+              key={a.id}
+              className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${platformClass}`}
+              title={acctLabel}
+            >
+              {platformLabel}
+            </span>
+          );
+        })}
         {i.video_format && (
           <span
             className="inline-flex items-center rounded-full bg-neutral-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"

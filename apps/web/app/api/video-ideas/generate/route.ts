@@ -1,26 +1,37 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { computeExpiresAt, runVideoIdeasAgent } from "@agentflow/core";
+import { computeExpiresAt, runUnifiedVideoIdeasAgent } from "@agentflow/core";
 
-// Top-up refresh, account-scoped. Streams progress to the client as
-// SSE so the UI can show "Step 5 · Searching #fingerstyle…" instead
-// of a 60-second silent spinner.
+// Unified multi-account video-ideas generation.
 //
-// AND writes a persistent job row at every step. If the user navigates
-// away from /video-ideas mid-generation, the SSE stream dies but the
-// agent keeps running server-side and the job row keeps updating. The
-// page re-attaches via polling /api/video-ideas/jobs/[id] on return.
+// Body: { integration_ids?: string[], total_count?: number }
+//   - integration_ids defaults to every connected supported integration
+//     (TT/YT/IG) the user has.
+//   - total_count defaults to 15.
 //
-// Event types:
-//   • prepare  — initial bookkeeping (prune expired, count pending)
-//   • step     — { count, label } — the agent called a tool
-//   • inserting — { generated } — about to write rows
-//   • done     — { generated, pending } — success
-//   • error    — { error }
+// The agent sees ALL accounts at once, generates ideas across the user's
+// network, and tags each idea with target_integration_ids[] +
+// primary_integration_id. The route validates targets against the user's
+// real integration set (drops hallucinated ids), writes the idea to
+// video_ideas with primary_integration_id mirrored onto integration_id
+// for back-compat, then writes one video_idea_targets row per target.
 //
-// integration_id selects which connected account to generate ideas for.
+// Concurrency: rejected with 409 if ANY running job in
+// video_ideas_generation_jobs overlaps with the requested integration_ids
+// (overlap check uses the integration_ids array column added in
+// migration 20260607000000).
+//
+// SSE event types:
+//   • job       — { id }
+//   • prepare   — { label }
+//   • step      — { count, label }
+//   • inserting — { generated }
+//   • done      — { generated, by_account: Record<integrationId, number> }
+//   • error     — { error }
 
 export const maxDuration = 60;
+
+const SUPPORTED_PROVIDERS = new Set(["tiktok", "youtube", "instagram"]);
 
 const TOOL_LABELS: Record<string, string> = {
   tiktok_get_my_profile: "Reading your profile",
@@ -64,10 +75,7 @@ type RawPlatforms = {
     description?: string | null;
     hashtags?: string[] | null;
   } | null;
-  instagram?: {
-    caption?: string | null;
-    hashtags?: string[] | null;
-  } | null;
+  instagram?: { caption?: string | null; hashtags?: string[] | null } | null;
 };
 
 function stripHash(h: string): string {
@@ -105,61 +113,73 @@ export async function POST(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return new NextResponse("Unauthorized", { status: 401 });
 
-  const url = new URL(request.url);
-  const body = (await request
-    .json()
-    .catch(() => null)) as { integration_id?: string } | null;
-  const integrationId =
-    body?.integration_id ?? url.searchParams.get("integration_id");
-  if (!integrationId) {
+  const body = (await request.json().catch(() => null)) as {
+    integration_ids?: string[];
+    total_count?: number;
+  } | null;
+
+  // Resolve the user's supported integrations. If the caller specified
+  // integration_ids, filter to that subset; otherwise use all of them.
+  const { data: allIntegrations } = await supabase
+    .from("integrations")
+    .select("id, provider")
+    .eq("user_id", user.id);
+  const supported = (allIntegrations ?? []).filter((i) =>
+    SUPPORTED_PROVIDERS.has(i.provider as string),
+  );
+  let integrationIds: string[];
+  if (body?.integration_ids && body.integration_ids.length > 0) {
+    const requested = new Set(body.integration_ids);
+    integrationIds = supported
+      .filter((i) => requested.has(i.id as string))
+      .map((i) => i.id as string);
+  } else {
+    integrationIds = supported.map((i) => i.id as string);
+  }
+  if (integrationIds.length === 0) {
     return NextResponse.json(
-      { error: "Missing integration_id" },
+      { error: "No connected supported integrations." },
       { status: 400 },
     );
   }
 
-  const { data: integration } = await supabase
-    .from("integrations")
-    .select("id, provider")
-    .eq("id", integrationId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!integration) {
-    return NextResponse.json(
-      { error: "Integration not found." },
-      { status: 404 },
-    );
-  }
+  const totalCount = Math.max(
+    1,
+    Math.min(50, Math.round(body?.total_count ?? 15)),
+  );
 
-  // Each integration generates only for its own platform — the agent
-  // picks a provider-specific prompt (TT / YT / IG) and the resulting
-  // ideas live in that integration's lane. Cross-platform sharing
-  // happens later via the Mark-Done modal, which can attach one shoot
-  // to posts on multiple platforms when the creator actually does
-  // cross-post a winner.
-  const targetPlatforms: string[] = [integration.provider];
-
-  // Don't kick off a duplicate if one is already in flight for this
-  // account. Saves the user from accidentally running two generations
-  // (and from being billed twice).
-  const { data: existingJob } = await supabase
+  // Concurrency guard: reject if ANY running job overlaps with this
+  // request's integration set. Uses the GIN-indexed integration_ids
+  // array column (migration 20260607000000).
+  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const { data: runningJobs } = await supabase
     .from("video_ideas_generation_jobs")
-    .select("id, started_at")
+    .select("id, integration_ids, integration_id")
     .eq("user_id", user.id)
-    .eq("integration_id", integrationId)
     .eq("status", "running")
-    .gt("updated_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (existingJob) {
+    .gt("updated_at", fiveMinAgo);
+  const overlap = (runningJobs ?? []).find((j) => {
+    const ids = ((j.integration_ids as string[] | null) ?? []).concat(
+      j.integration_id ? [j.integration_id as string] : [],
+    );
+    return ids.some((id) => integrationIds.includes(id));
+  });
+  if (overlap) {
     return NextResponse.json(
       {
-        error: "A generation is already running for this account.",
-        job_id: existingJob.id,
+        error: "A generation is already running for one of these accounts.",
+        job_id: overlap.id,
       },
       { status: 409 },
     );
+  }
+
+  // Validation set for target ids the agent emits.
+  const validIntegrationIds = new Set(integrationIds);
+  // Provider lookup for the back-compat video_ideas.provider column.
+  const providerByIntegration = new Map<string, string>();
+  for (const i of supported) {
+    providerByIntegration.set(i.id as string, i.provider as string);
   }
 
   const encoder = new TextEncoder();
@@ -173,8 +193,6 @@ export async function POST(request: NextRequest) {
             encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
           );
         } catch {
-          // Controller already closed — user navigated away. Stop
-          // trying to send; the job row keeps updating from here.
           clientGone = true;
         }
       };
@@ -182,24 +200,23 @@ export async function POST(request: NextRequest) {
         try {
           controller.close();
         } catch {
-          // already closed — ignore
+          // already closed
         }
       };
 
-      // Insert the job row up front so /jobs/active can find it
-      // immediately, even before the first onStep fires.
+      // Insert the job row up front. integration_ids column tracks the
+      // full target set; legacy integration_id is null for unified runs.
       let jobId: string | null = null;
       const { data: jobRow } = await supabase
         .from("video_ideas_generation_jobs")
         .insert({
           user_id: user.id,
-          integration_id: integrationId,
-          // New integration_ids array mirrors integration_id so the
-          // unified /generate route's overlap check sees this job too.
-          integration_ids: [integrationId],
+          integration_id: null,
+          integration_ids: integrationIds,
           status: "running",
           step_count: 0,
           step_label: "Starting…",
+          requested_count: totalCount,
         })
         .select("id")
         .single();
@@ -231,60 +248,33 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        send("prepare", { label: "Checking what's expired…" });
-        await updateJob({ step_label: "Checking what's expired…" });
+        send("prepare", {
+          label: `Prepping ${integrationIds.length} account${integrationIds.length === 1 ? "" : "s"}…`,
+        });
+        await updateJob({ step_label: "Prepping accounts…" });
+
+        // Prune expired + dismissed ideas across ALL targeted accounts
+        // in a single round-trip.
         const nowIso = new Date().toISOString();
         await supabase
           .from("video_ideas")
           .delete()
           .eq("user_id", user.id)
-          .eq("integration_id", integrationId)
+          .in("integration_id", integrationIds)
           .or(`expires_at.lt.${nowIso},status.eq.dismissed`);
 
-        const { data: settingsRow } = await supabase
-          .from("video_ideas_settings")
-          .select("target_count")
-          .eq("user_id", user.id)
-          .eq("integration_id", integrationId)
-          .maybeSingle();
-        const targetCount = settingsRow?.target_count ?? 10;
-
-        const { count: pendingCount } = await supabase
-          .from("video_ideas")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .eq("integration_id", integrationId)
-          .eq("status", "pending");
-
-        const deficit = Math.max(0, targetCount - (pendingCount ?? 0));
-        if (deficit === 0) {
-          send("done", {
-            generated: 0,
-            pending: pendingCount ?? 0,
-            message: "Already at target.",
-          });
-          await finalizeJob("done", {
-            generated_count: 0,
-            step_label: "Already at target.",
-          });
-          close();
-          return;
-        }
-
         send("prepare", {
-          label: `Generating ${deficit} new idea${deficit === 1 ? "" : "s"}…`,
+          label: `Generating ${totalCount} idea${totalCount === 1 ? "" : "s"} across ${integrationIds.length} account${integrationIds.length === 1 ? "" : "s"}…`,
         });
         await updateJob({
-          requested_count: deficit,
-          step_label: `Generating ${deficit} new idea${deficit === 1 ? "" : "s"}…`,
+          step_label: `Generating ${totalCount} ideas…`,
         });
 
-        const result = await runVideoIdeasAgent({
+        const result = await runUnifiedVideoIdeasAgent({
           supabase,
           userId: user.id,
-          integrationId,
-          count: deficit,
-          targetPlatforms,
+          integrationIds,
+          totalCount,
           onStep: async ({ count, description }) => {
             const label = humanizeStep(description);
             send("step", { count, label });
@@ -300,24 +290,41 @@ export async function POST(request: NextRequest) {
           return;
         }
 
-        // Single-account refresh — every idea targets this one
-        // integration. The unified agent guarantees target_integration_ids
-        // = [integrationId] and primary_integration_id = integrationId
-        // when called with a single-element array.
+        // Validate + insert. For each idea: drop if any target is
+        // unknown or primary not in targets; else insert video_ideas
+        // (with integration_id = primary for back-compat) and one
+        // video_idea_targets row per target.
+        const byAccount: Record<string, number> = {};
+        let inserted = 0;
+        let droppedHallucinations = 0;
+
         if ((result.ideas?.length ?? 0) > 0) {
           send("inserting", { generated: result.ideas?.length ?? 0 });
           await updateJob({
-            step_label: `Saving ${result.ideas?.length ?? 0} idea${result.ideas?.length === 1 ? "" : "s"}…`,
+            step_label: `Saving ${result.ideas?.length ?? 0} ideas…`,
           });
         }
-        let inserted = 0;
+
         for (const idea of result.ideas ?? []) {
+          const targets = (idea.target_integration_ids ?? []).filter((id) =>
+            validIntegrationIds.has(id),
+          );
+          if (
+            targets.length === 0 ||
+            !validIntegrationIds.has(idea.primary_integration_id) ||
+            !targets.includes(idea.primary_integration_id)
+          ) {
+            droppedHallucinations += 1;
+            continue;
+          }
+          const primary = idea.primary_integration_id;
+          const provider = providerByIntegration.get(primary) ?? "tiktok";
           const { data: insertedIdea, error: insertErr } = await supabase
             .from("video_ideas")
             .insert({
               user_id: user.id,
-              integration_id: integrationId,
-              provider: integration.provider,
+              integration_id: primary,
+              provider,
               title: idea.title,
               hook: idea.hook ?? null,
               format: idea.format ?? null,
@@ -329,7 +336,7 @@ export async function POST(request: NextRequest) {
               script: idea.script ?? null,
               post_title: idea.post_title ?? null,
               description: idea.description ?? null,
-              hashtags: (idea.hashtags ?? []).map((h) => h.replace(/^#/, "")),
+              hashtags: (idea.hashtags ?? []).map(stripHash),
               cta: idea.cta ?? null,
               visual_notes: idea.visual_notes ?? null,
               optimal_post_window: idea.optimal_post_window ?? null,
@@ -347,33 +354,45 @@ export async function POST(request: NextRequest) {
             .single();
           if (insertErr || !insertedIdea) {
             console.error(
-              "[refresh] insert video_ideas failed:",
+              "[generate] insert video_ideas failed:",
               insertErr?.message,
             );
             continue;
           }
-          // Write the targets-table mirror so the new page-load join
-          // hydrates target_integration_ids correctly.
+
+          const targetRows = targets.map((integrationId) => ({
+            idea_id: insertedIdea.id as string,
+            integration_id: integrationId,
+            user_id: user.id,
+            is_primary: integrationId === primary,
+          }));
           const { error: targetsErr } = await supabase
             .from("video_idea_targets")
-            .insert({
-              idea_id: insertedIdea.id as string,
-              integration_id: integrationId,
-              user_id: user.id,
-              is_primary: true,
-            });
+            .insert(targetRows);
           if (targetsErr) {
             console.error(
-              "[refresh] insert video_idea_targets failed:",
+              "[generate] insert video_idea_targets failed:",
               targetsErr.message,
             );
+            // Don't bail; the video_ideas row stands. Single-target
+            // reads still work via the integration_id mirror.
           }
+
           inserted += 1;
+          for (const t of targets) {
+            byAccount[t] = (byAccount[t] ?? 0) + 1;
+          }
+        }
+
+        if (droppedHallucinations > 0) {
+          console.warn(
+            `[generate] dropped ${droppedHallucinations} ideas with invalid target_integration_ids`,
+          );
         }
 
         send("done", {
           generated: inserted,
-          pending: (pendingCount ?? 0) + inserted,
+          by_account: byAccount,
           tokens: result.tokens,
         });
         await finalizeJob("done", {

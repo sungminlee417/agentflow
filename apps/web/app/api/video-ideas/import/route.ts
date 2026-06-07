@@ -150,6 +150,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 1b. Mirror the integration into video_idea_targets so the page
+  // loader's join finds this imported idea under the right account.
+  await supabase.from("video_idea_targets").insert({
+    idea_id: ideaRow.id,
+    integration_id: integration.id,
+    user_id: user.id,
+    is_primary: true,
+  });
+
   // 2. Per-platform post row — the review pipeline reads from this.
   const { data: postRow, error: postErr } = await supabase
     .from("video_idea_posts")

@@ -1,4 +1,5 @@
 import type { RecentFeedback, RecentReview } from "./types";
+import type { AccountContext } from "./context";
 
 // All the per-platform prompt builders + the shared helpers that
 // compose them. Extracted from the main agent file so the runner
@@ -558,6 +559,358 @@ Return ONLY a JSON object {ideas:[...]} matching:
   "thumbnail_concept":string, "engagement_hook":string,
   "trending_sound":null,
   "platforms":{ "instagram":{ "caption":string, "hashtags":[string] } }
+}] }
+
+Your LAST message is this JSON only — no prose, no code fence.`;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Unified multi-account prompt. Replaces the three platform-specific
+// prompts above for the new /api/video-ideas/generate flow.
+//
+// Structure:
+//   1. STRICT JSON OUTPUT (same as the per-platform prompts)
+//   2. ACCOUNT INVENTORY — list every connected integration with
+//      label + platform + integration_id so the model can reference
+//      ids when targeting ideas
+//   3. CROSS-ACCOUNT TARGETING RULE — aggressive-within-niche +
+//      never-shoehorn-across-niche, with examples grounded in the
+//      user's actual accounts
+//   4. PER-ACCOUNT CONTEXT — reviewsBlock + feedbackBlock +
+//      preferencesBlock per account
+//   5. UNIFIED TOOL INVENTORY — every provider tool routes via
+//      `account` param; research tools take `target_integration_id`
+//   6. PROCEDURE — research pass per account, then per-idea
+//      review/feedback lookups scoped to the primary target
+//   7. EVIDENCE FLOORS — same per-platform thresholds as the per-
+//      platform prompts; computed per target account
+//   8. KINDS + RULES + SCRIPT TEMPLATES + CAPTION + VIRALITY
+//   9. JSON SCHEMA with target_integration_ids + primary_integration_id
+//
+// The anti-shoehorn rule appears BOTH at the top AND in RULES so it
+// survives prompt erosion as the model walks the long structure.
+// ─────────────────────────────────────────────────────────────────────
+
+const PROVIDER_LABEL: Record<string, string> = {
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  instagram: "Instagram",
+};
+
+function describeUnifiedAvailable(
+  accounts: AccountContext[],
+  connected: string[],
+): string {
+  const lines: string[] = [];
+  const providers = new Set(accounts.map((a) => a.integration.provider));
+  if (providers.has("tiktok")) {
+    lines.push(
+      "- TikTok per-account tools: tiktok_get_my_profile, tiktok_list_my_videos, tiktok_top_my_videos, tiktok_query_videos (every call takes `account` — pass the integration_id)",
+    );
+  }
+  if (providers.has("youtube")) {
+    lines.push(
+      "- YouTube per-account tools: youtube_get_my_channel, youtube_list_my_videos, youtube_get_video_analytics, youtube_get_video_traffic_sources, youtube_get_video_comments (each takes `account`)",
+    );
+    lines.push("- YouTube niche discovery: youtube_search_niche (takes `account` — any YT account suffices)");
+  }
+  if (providers.has("instagram")) {
+    lines.push(
+      "- Instagram per-account tools: instagram_get_my_account, instagram_list_my_media, instagram_get_media_insights, instagram_get_account_insights, instagram_list_comments (each takes `account`)",
+    );
+  }
+  if (connected.includes("apify")) {
+    if (providers.has("tiktok")) {
+      lines.push(
+        "- TikTok niche/competitor (Apify): tiktok_search_hashtag, tiktok_search_keyword, tiktok_get_profile",
+      );
+    }
+    if (providers.has("instagram")) {
+      lines.push(
+        "- Instagram niche/competitor (Apify): instagram_search_hashtag, instagram_get_profile",
+      );
+    }
+  }
+  if (connected.includes("transcription")) {
+    lines.push(
+      "- Transcription: tiktok_transcribe_video — use sparingly to extract a competitor video's exact hook.",
+    );
+  }
+  lines.push(
+    "- Targeted back-catalogue lookup: video_ideas_find_similar_reviews — takes `target_integration_id` (the account you're considering an idea FOR), plus format/kind/title_keywords filters. Call BEFORE finalising any idea you're unsure about.",
+  );
+  lines.push(
+    "- Recent rejections lookup: video_ideas_find_recent_feedback — takes `target_integration_id`, plus reason_code/kind filters. Beyond the 15 dumped per-account above.",
+  );
+  lines.push(
+    "- Uploaded analytics CSVs: list_my_analytics_uploads, get_analytics_upload",
+  );
+  return lines.join("\n");
+}
+
+function accountInventoryBlock(accounts: AccountContext[]): string {
+  const lines = [
+    "ACCOUNT INVENTORY",
+    "─────────────────────────",
+    "You're generating ideas across these connected accounts. Each idea you produce will target one or more of them via target_integration_ids:",
+    "",
+  ];
+  for (const a of accounts) {
+    const platform = PROVIDER_LABEL[a.integration.provider] ?? a.integration.provider;
+    lines.push(
+      `  [${a.label}] platform=${platform.toLowerCase()}  integration_id=${a.integration.id}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function crossAccountTargetingRule(accounts: AccountContext[]): string {
+  // Compose a few concrete examples from the actual labels to keep the
+  // rule sticky. If accounts share a label substring ("Sungmin") treat
+  // as same-niche siblings; otherwise treat as distinct niches.
+  const byLabel = new Map<string, AccountContext[]>();
+  for (const a of accounts) {
+    // Crude niche-grouping heuristic: the first word of the label.
+    const key = a.label.split(/\s+/)[0]?.toLowerCase() ?? "";
+    const arr = byLabel.get(key) ?? [];
+    arr.push(a);
+    byLabel.set(key, arr);
+  }
+  const sameNicheGroups = [...byLabel.values()].filter((g) => g.length > 1);
+  const distinctNicheLabels = [...byLabel.values()]
+    .filter((g) => g.length === 1)
+    .map((g) => g[0]!.label);
+
+  const exampleLines: string[] = [];
+  if (sameNicheGroups.length > 0) {
+    const g = sameNicheGroups[0]!;
+    exampleLines.push(
+      `  • Correctly multi-targeting: an idea that fits ${g.map((a) => a.label).join(" + ")} (same niche, different platforms) — populate target_integration_ids with all of them.`,
+    );
+  }
+  if (distinctNicheLabels.length >= 2) {
+    exampleLines.push(
+      `  • Correctly single-targeting: an idea for [${distinctNicheLabels[0]}] should NOT also target [${distinctNicheLabels[1]}] — different audiences. Single-target it.`,
+    );
+  } else if (sameNicheGroups.length > 0 && distinctNicheLabels.length === 1) {
+    exampleLines.push(
+      `  • Correctly single-targeting: an idea for [${distinctNicheLabels[0]}] should NOT target ${sameNicheGroups[0]!.map((a) => a.label).join(" + ")} — different niche. Single-target it.`,
+    );
+  }
+
+  return `CROSS-ACCOUNT TARGETING — HARD RULE
+─────────────────────────
+When two of your accounts share a niche (same person, same topic, different platforms), DEFAULT to multi-targeting any idea that fits the shared niche. The shoot is identical; only the per-platform caption package differs.
+
+When accounts belong to different niches, single-target. NEVER shoehorn an idea onto an account where it doesn't fit just to "use" that account.
+
+For each idea, the rationale must name the target audience(s) and why the topic lands. If multi-targeting, the rationale must mention BOTH audiences explicitly.
+
+${exampleLines.length > 0 ? exampleLines.join("\n") : ""}`;
+}
+
+function perAccountContextBlock(accounts: AccountContext[]): string {
+  const sections: string[] = ["PER-ACCOUNT CONTEXT", "─────────────────────────"];
+  for (const a of accounts) {
+    const platform = PROVIDER_LABEL[a.integration.provider] ?? a.integration.provider;
+    sections.push(
+      "",
+      `━━━ [${a.label}] (id=${a.integration.id}, platform=${platform.toLowerCase()}) ━━━`,
+    );
+    const reviews = reviewsBlock(a.recentReviews);
+    const feedback = feedbackBlock(a.recentFeedback);
+    const prefs = preferencesBlock(a.preferences);
+    if (!reviews && !feedback && !prefs) {
+      sections.push(
+        "(No reviewed posts, rejected ideas, or per-account preferences yet — generate based on tool research.)",
+      );
+    } else {
+      if (reviews) sections.push(reviews);
+      if (feedback) sections.push(feedback);
+      if (prefs) sections.push(prefs);
+    }
+  }
+  return sections.join("\n");
+}
+
+function unifiedProcedureBlock(
+  accounts: AccountContext[],
+  connected: string[],
+): string {
+  const lines: string[] = [
+    "PROCEDURE",
+    "─────────────────────────",
+    "1. For EACH account in the inventory, run the platform-appropriate research pass. Use the `account` parameter on every provider tool to scope to that integration_id:",
+    "",
+  ];
+  for (const a of accounts) {
+    const provider = a.integration.provider;
+    if (provider === "tiktok") {
+      lines.push(
+        `   • [${a.label}] tiktok_top_my_videos (top_n 10, from_history 100) → derive USER_MEDIAN_PLAYS_${a.label}. Then tiktok_list_my_videos (max_count 20) for current voice. ${connected.includes("apify") ? `Then tiktok_search_hashtag on the top 2 hashtags for niche/competitor/trend/rising signal.` : `(No Apify — skip competitor/trend/rising for this account.)`}`,
+      );
+    } else if (provider === "youtube") {
+      lines.push(
+        `   • [${a.label}] youtube_get_my_channel + youtube_list_my_videos (limit 20) → derive USER_MEDIAN_VIEWS_${a.label} + detect Shorts vs long-form mix. Then youtube_search_niche on 1-2 recent topics for competitor/trend signal.`,
+      );
+    } else if (provider === "instagram") {
+      lines.push(
+        `   • [${a.label}] instagram_get_my_account + instagram_list_my_media (limit 20) + instagram_get_media_insights on top 2-3 → derive USER_MEDIAN_PLAYS_${a.label}. ${connected.includes("apify") ? `Then instagram_search_hashtag on the niche tag for competitor/trend signal.` : `(No Apify — skip competitor/trend/rising for this account.)`}`,
+      );
+    }
+  }
+  lines.push("");
+  lines.push(
+    "2. For EACH candidate idea, decide its target_integration_ids (1+) and primary_integration_id (must be in the array).",
+  );
+  lines.push(
+    "3. Call video_ideas_find_similar_reviews with target_integration_id = your primary target. Use the returned post-mortems to refine or drop the idea.",
+  );
+  lines.push(
+    "4. If kind ∈ {trend, rising, competitor}, also call video_ideas_find_recent_feedback with the same target_integration_id to verify the creator hasn't already rejected this angle.",
+  );
+  return lines.join("\n");
+}
+
+const UNIFIED_EVIDENCE_FLOORS = `EVIDENCE FLOORS — HARD RULES (computed per target account using THAT account's USER_MEDIAN)
+─────────────────────────
+
+Before committing to any non-pattern, non-seasonal idea, check the floor for the platform of the PRIMARY target. If you can't clear it, in order of preference:
+  (1) Downgrade to kind="pattern" and ground in that account's own top performers.
+  (2) Drop the idea — honest under-delivery beats fabricated signal.
+  (3) Replace with a different idea that DOES clear the floor.
+
+COMPETITOR floor (TT/IG):
+- competitor_video plays >= 0.5 × USER_MEDIAN_PLAYS for that target account
+- competitor account followers >= 1000
+- Required source_refs: {competitor_handle, competitor_video_url, competitor_video_plays, competitor_followers, user_median_plays, target_integration_id}
+
+COMPETITOR floor (YT):
+- competitor video views >= 0.5 × USER_MEDIAN_VIEWS for that target account
+- competitor channel subscribers >= 1000
+- Required source_refs: {competitor_handle, competitor_video_url, competitor_video_views, competitor_subscribers, user_median_views, target_integration_id}
+
+TREND floor:
+- Sample is from last 14 days AND sample plays/views >= 0.5 × USER_MEDIAN for that target
+- Required source_refs: {hashtag, sample_url, sample_plays|views, sample_create_time, target_integration_id}
+
+RISING floor:
+- velocity_ratio = (top plays last 3-7d) / (top plays prior 7-14d) >= 1.5
+- Required source_refs: {hashtag, recent_window_top_plays, prior_window_top_plays, velocity_ratio, target_integration_id}
+- Below 1.5 → call it trend or skip.
+
+HASHTAG-SEARCH FILTERING (Apify TT + IG):
+After search returns N rows: sort by plays desc, only consider the top half AND require plays >= 0.5 × USER_MEDIAN for the target account.`;
+
+const UNIFIED_SCRIPT_TEMPLATES = `SCRIPT TEMPLATES — pick the template matching the PRIMARY target's platform + video_format
+
+TikTok / IG Reels / YouTube Shorts (short, ≤60s):
+    [0:00-0:03] HOOK   📢 SAY · 🎬 ACTION · 📺 ON-SCREEN TEXT · 🎵 AUDIO
+    [0:03-0:10] BEAT 1 — Setup
+    [0:10-0:25] BEAT 2 — Payoff/Demo (✂️ CUT)
+    [0:25-0:35] BEAT 3 — Twist/Comparison
+    [0:35-0:40] CTA
+HOOK ≤3s, CTA ≤5s, total ≤60s.
+
+YouTube long-form (3-15 min):
+    [0:00-0:30] HOOK — promise + stakes; on-screen title card
+    [0:30-1:00] CONTEXT — why this matters; chapter 1 transition
+    [Chapters] each chapter is a discrete beat with: chapter title, on-screen text overlay, B-roll cues, restated promise
+    [Outro 0:30] recap + soft CTA + end-screen CTA
+Pacing 60-90 words spoken per minute (slower for tutorial).`;
+
+export function unifiedPrompt(args: {
+  totalCount: number;
+  today: string;
+  accounts: AccountContext[];
+  connected: string[];
+}): string {
+  const { totalCount, today, accounts, connected } = args;
+  if (accounts.length === 0) {
+    throw new Error("unifiedPrompt: at least one account required");
+  }
+  return `You are a multi-channel content strategist working across ${accounts.length} creator account${accounts.length === 1 ? "" : "s"}. Produce UP TO ${totalCount} fresh video ideas across the accounts below. Each idea targets one or more accounts. Quality > quantity — if signal is thin, return fewer ideas with strong evidence rather than ${totalCount} with fudged ones.
+
+OUTPUT FORMAT — STRICT: Your FINAL response is the JSON object only. No "Perfect", no preamble, no markdown headers, no code fence, no clarifying questions. The response must START with the literal character \`{\` and END with \`}\`. If ambiguous, pick the most reasonable interpretation from the tool data — never ask the user.
+
+Today is ${today}.
+
+${accountInventoryBlock(accounts)}
+
+${crossAccountTargetingRule(accounts)}
+
+${perAccountContextBlock(accounts)}
+
+UNIFIED TOOL INVENTORY
+─────────────────────────
+${describeUnifiedAvailable(accounts, connected)}
+
+${unifiedProcedureBlock(accounts, connected)}
+
+${UNIFIED_EVIDENCE_FLOORS}
+
+KINDS (balance across these — subject to evidence floors above)
+- pattern: extrapolate from a winning format — a NEW song/topic that fits.
+- competitor: meets COMPETITOR floor. Something a peer nailed and this account hasn't.
+- trend: meets TREND floor. Currently visible, not yet saturated.
+- rising: meets RISING floor. Max 1-2 per refresh.
+- seasonal: calendar-anchored. hard_date in next 60 days (ISO 8601).
+
+RULES
+- Ground EVERY idea in a tool result with the source_refs fields required by the EVIDENCE FLOORS above. Missing a required field = the idea is rejected at insert time.
+- target_integration_ids: array of >=1 integration_ids from the ACCOUNT INVENTORY. Aggressive-within-niche multi-targeting is encouraged; cross-niche shoehorning is forbidden (see CROSS-ACCOUNT TARGETING above).
+- primary_integration_id: must be a member of target_integration_ids. Determines the default platform-pack and the back-compat video_ideas.integration_id mirror.
+- title: specific + recordable.
+- hook: actual first spoken/shown line.
+- format: short ("acoustic vs classical comparison").
+- rationale: 1-2 sentences citing specific evidence. If multi-targeting, name BOTH target audiences and why the topic lands for each. If a recent post-mortem above applies to the primary target, cite it by title + verdict.
+- saturation_warning: short string only when you saw the SPECIFIC format with saturation signals; else null.
+- video_format: set to "short" or "long" ONLY when a YouTube account is in target_integration_ids; otherwise null.
+
+${UNIFIED_SCRIPT_TEMPLATES}
+
+CAPTION FIELDS (base — shared across platforms)
+- post_title: ≤100 chars, attention-grabbing.
+- description: 2-3 short paragraphs ending with CTA. No inline hashtags.
+- hashtags: 5-7 strings, no leading '#'. Base set; per-platform packs may override.
+- cta: one explicit ask.
+- visual_notes: 4-6 "• " bullets (lighting, framing, props, B-roll).
+
+VIRALITY
+- optimal_post_window: derive from top performers' create_time patterns of the primary target.
+- suggested_duration: seconds, e.g. "18-25s".
+- thumbnail_concept: ONE visual sentence.
+- engagement_hook: SPECIFIC comment-driver, distinct from opening hook.
+- trending_sound: name + sound id/URL when found; else null. Never invent.
+
+PER-PLATFORM PACKAGING
+─────────────────────────
+For each idea, populate idea.platforms with a sub-pack for EVERY distinct PLATFORM in target_integration_ids' providers. Two TikTok accounts → one tiktok pack (same caption serves both). Targets spanning TT+YT+IG → all three packs.
+
+  • TikTok pack: caption ≤150 chars + 5-7 hashtags (no leading #). Conversational, end with a soft question.
+  • YouTube pack: title ≤100 chars (search-optimised, keyword front-loaded) + description 3-5 paragraphs + 3-5 hashtags. Don't lead the title with a hashtag.
+  • Instagram pack: caption 150-400 chars typical (2200 max), hook line survives the ~125-char truncation cutoff. 3-8 niche-focused hashtags.
+
+JSON SCHEMA
+─────────────────────────
+Return ONLY a JSON object {ideas:[...]} matching:
+{ "ideas":[{
+  "title":string, "hook":string, "format":string, "rationale":string,
+  "kind":"pattern"|"trend"|"rising"|"competitor"|"seasonal",
+  "target_integration_ids":[uuid, ...],   // >=1
+  "primary_integration_id":uuid,           // must be in target_integration_ids
+  "source_refs":{...}, "hard_date":string, "saturation_warning":string|null,
+  "script":string, "post_title":string, "description":string,
+  "hashtags":[string], "cta":string, "visual_notes":string,
+  "optimal_post_window":string, "suggested_duration":string,
+  "thumbnail_concept":string, "engagement_hook":string,
+  "trending_sound":string|null,
+  "video_format":"short"|"long"|null,
+  "platforms":{
+    "tiktok":{ "caption":string, "hashtags":[string] }?,
+    "youtube":{ "title":string, "description":string, "hashtags":[string] }?,
+    "instagram":{ "caption":string, "hashtags":[string] }?
+  }
 }] }
 
 Your LAST message is this JSON only — no prose, no code fence.`;

@@ -131,6 +131,15 @@ export default async function VideoIdeasPage() {
 
   const allIdeas = (ideasData ?? []) as VideoIdeaRow[];
 
+  // Default: target = own integration_id (for back-compat with pre-
+  // migration code paths that might race ahead of the targets-table
+  // hydration below).
+  for (const row of allIdeas) {
+    row.target_integration_ids = row.integration_id
+      ? [row.integration_id]
+      : [];
+  }
+
   // Hydrate per-platform posts in ONE batch across every loaded idea.
   if (allIdeas.length > 0) {
     const ideaIds = allIdeas.map((i) => i.id);
@@ -166,6 +175,30 @@ export default async function VideoIdeasPage() {
     for (let i = 0; i < allIdeas.length; i += 1) {
       const row = allIdeas[i]!;
       row.posts = byIdea.get(row.id) ?? [];
+    }
+
+    // Hydrate target_integration_ids from the join table. Replaces the
+    // back-compat single-element default seeded above. Multi-target
+    // ideas (new) get N entries; legacy backfilled ideas still get
+    // exactly one (their original integration_id).
+    const { data: targetRows } = await supabase
+      .from("video_idea_targets")
+      .select("idea_id, integration_id")
+      .eq("user_id", user.id)
+      .in("idea_id", ideaIds);
+    const targetsByIdea = new Map<string, string[]>();
+    for (const t of targetRows ?? []) {
+      const ideaId = t.idea_id as string;
+      const arr = targetsByIdea.get(ideaId) ?? [];
+      arr.push(t.integration_id as string);
+      targetsByIdea.set(ideaId, arr);
+    }
+    for (let i = 0; i < allIdeas.length; i += 1) {
+      const row = allIdeas[i]!;
+      const targets = targetsByIdea.get(row.id);
+      if (targets && targets.length > 0) {
+        row.target_integration_ids = targets;
+      }
     }
   }
 

@@ -21,6 +21,14 @@ export type GeneratedIdea = {
   format?: string;
   rationale?: string;
   kind: VideoIdeaKind;
+  /** Which connected accounts this idea targets. >=1 required.
+   *  Aggressive within-niche multi-targeting is encouraged; cross-niche
+   *  shoehorning is forbidden by the prompt. */
+  target_integration_ids: string[];
+  /** Which target is the "primary" — drives video_ideas.integration_id
+   *  for back-compat and chooses the default platform-pack on cards.
+   *  Must be a member of target_integration_ids. */
+  primary_integration_id: string;
   source_refs?: Record<string, unknown>;
   /** Only meaningful for seasonal — a hard date the idea should ship by. */
   hard_date?: string;

@@ -63,6 +63,10 @@ export type VideoIdeaRow = {
    *  than one platform (TikTok + YT Shorts + IG Reels). Empty array
    *  for ideas that haven't been marked posted yet. */
   posts?: PostedRow[];
+  /** Every account this idea targets — hydrated from video_idea_targets.
+   *  Always >=1. Single-target ideas (the common case + every backfilled
+   *  pre-migration idea) have one entry equal to integration_id. */
+  target_integration_ids: string[];
   /** Per-platform caption packaging produced by the generator. Only
    *  the platforms the user has connected are populated; legacy ideas
    *  pre-Phase-3 have this null and fall back to post_title /

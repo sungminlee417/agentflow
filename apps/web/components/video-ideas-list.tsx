@@ -173,6 +173,10 @@ export function VideoIdeasList({
 
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Count picker for the unified Generate button. Default 15 — light
+  // enough to fit a single 60s Vercel function, heavy enough that a
+  // 4-account user gets ~3-4 per account on average.
+  const [generateCount, setGenerateCount] = useState(15);
 
   // Poll any active job ids that we adopted from server state. This is
   // the safety net for SSE drops: if a stream dies, the job row keeps
@@ -291,8 +295,14 @@ export function VideoIdeasList({
 
   const filtered = useMemo(() => {
     const base = baseForView(view);
+    // Multi-target ideas appear under EVERY account chip they target,
+    // not just the primary. So filtering by an account chip shows
+    // single-target ideas for that account AND multi-target ideas
+    // that include it.
     const byAccount = filterAccountId
-      ? base.filter((i) => i.integration_id === filterAccountId)
+      ? base.filter((i) =>
+          (i.target_integration_ids ?? []).includes(filterAccountId),
+        )
       : base;
     const byKind =
       filter === "all"
@@ -342,17 +352,21 @@ export function VideoIdeasList({
     return sorted;
   }, [view, baseForView, filter, ideasSort, postedSort, filterAccountId]);
 
-  // Per-account pending counts for the chip row. Reads from the
-  // active view's base so the badge reflects what's currently
-  // visible (e.g. when on Posted tab, the chip count is posted, not
-  // pending). Sums by integration_id so accounts with zero ideas
-  // still render with a 0.
+  // Per-account counts for the chip row. Reads from the active view's
+  // base so the badge reflects what's currently visible. Multi-target
+  // ideas increment every target's count (so a guitar idea targeting
+  // both Sungmin TT and Sungmin YT shows up under BOTH chips).
   const accountCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const g of groups) m.set(g.account.id, 0);
     for (const i of baseForView(view)) {
-      if (!i.integration_id) continue;
-      m.set(i.integration_id, (m.get(i.integration_id) ?? 0) + 1);
+      const targets = i.target_integration_ids ?? [];
+      const seen = new Set<string>();
+      for (const t of targets) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        m.set(t, (m.get(t) ?? 0) + 1);
+      }
     }
     return m;
   }, [groups, baseForView, view]);
@@ -701,22 +715,159 @@ export function VideoIdeasList({
     }
   }
 
-  // Fire one refreshOne per connected account in parallel and refresh
-  // the page when they all settle.
-  async function refreshAll() {
+  // Unified generate: one POST → one agent run sees every connected
+  // account at once → ideas come back tagged with target_integration_ids.
+  // Replaces the old per-account refreshAll loop.
+  async function generateAll(totalCount: number) {
     if (groups.length === 0) return;
-    // Serialize per-account refreshes. Running them concurrently has
-    // every agent's system prompt + tool defs + tool results
-    // competing for the same Anthropic input-tokens-per-minute
-    // budget, which blows the tier-1 30k/min cap on a 2-3 account
-    // refresh. Sequential takes longer but each agent gets the full
-    // budget on its own, and the per-account progress strip already
-    // shows which one is in flight.
-    for (const g of groups) {
-      await refreshOne(g.account.id);
+    setError(null);
+    setMessage(null);
+    // Use a synthetic key "__all__" for the unified-run progress strip
+    // so it sits in the SAME refreshing Map the per-account ↻ uses.
+    const KEY = "__all__";
+    const controller = new AbortController();
+    abortControllersRef.current.get(KEY)?.abort();
+    abortControllersRef.current.set(KEY, controller);
+    setRefreshing((prev) => {
+      const next = new Map(prev);
+      next.set(KEY, {
+        label: `Generating ${totalCount} ideas across ${groups.length} account${groups.length === 1 ? "" : "s"}…`,
+        count: 0,
+        activeJobId: null,
+      });
+      return next;
+    });
+    try {
+      const res = await fetch("/api/video-ideas/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ total_count: totalCount }),
+        signal: controller.signal,
+      });
+      if (res.status === 409) {
+        const json = (await res.json().catch(() => ({}))) as {
+          job_id?: string;
+        };
+        setRefreshing((prev) => {
+          const next = new Map(prev);
+          next.set(KEY, {
+            label: "Resuming in-flight generation…",
+            count: 0,
+            activeJobId: json.job_id ?? null,
+          });
+          return next;
+        });
+        return;
+      }
+      if (!res.ok || !res.body) {
+        setRefreshing((prev) => {
+          const next = new Map(prev);
+          next.delete(KEY);
+          return next;
+        });
+        setError(`Generation failed (${res.status}).`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (controller.signal.aborted) return;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 2);
+          let evtType = "message";
+          let dataStr = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) evtType = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataStr = line.slice(5).trim();
+          }
+          if (!dataStr) continue;
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = JSON.parse(dataStr);
+          } catch {
+            continue;
+          }
+          if (evtType === "job") {
+            const jid = typeof payload.id === "string" ? payload.id : null;
+            if (jid) {
+              setRefreshing((prev) => {
+                const next = new Map(prev);
+                const cur = next.get(KEY);
+                next.set(KEY, {
+                  label: cur?.label ?? "Working…",
+                  count: cur?.count ?? 0,
+                  activeJobId: jid,
+                });
+                return next;
+              });
+            }
+          } else if (evtType === "prepare" || evtType === "step") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(KEY);
+              next.set(KEY, {
+                label: String(payload.label ?? cur?.label ?? "Working…"),
+                count: Number(payload.count ?? cur?.count ?? 0),
+                activeJobId: cur?.activeJobId ?? null,
+              });
+              return next;
+            });
+          } else if (evtType === "inserting") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(KEY);
+              next.set(KEY, {
+                label: "Saving…",
+                count: Number(payload.generated ?? cur?.count ?? 0),
+                activeJobId: cur?.activeJobId ?? null,
+              });
+              return next;
+            });
+          } else if (evtType === "done") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              next.delete(KEY);
+              return next;
+            });
+            const generated = Number(payload.generated ?? 0);
+            setMessage(
+              generated > 0
+                ? `Generated ${generated} new idea${generated === 1 ? "" : "s"}.`
+                : "No new ideas — current set is fresh.",
+            );
+            router.refresh();
+            return;
+          } else if (evtType === "error") {
+            setRefreshing((prev) => {
+              const next = new Map(prev);
+              next.delete(KEY);
+              return next;
+            });
+            setError(
+              typeof payload.error === "string"
+                ? payload.error
+                : "Generation failed.",
+            );
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      if (aborted) return;
+      setRefreshing((prev) => {
+        const next = new Map(prev);
+        next.delete("__all__");
+        return next;
+      });
+      setError(err instanceof Error ? err.message : String(err));
     }
-    router.refresh();
-    setMessage("Generation complete.");
   }
 
   const totalActive = refreshing.size;
@@ -782,15 +933,27 @@ export function VideoIdeasList({
             <Settings className="h-3.5 w-3.5" aria-hidden="true" />
             Settings
           </button>
+          <select
+            value={generateCount}
+            onChange={(e) => setGenerateCount(Number(e.target.value))}
+            disabled={isRefreshing}
+            title="How many ideas to generate"
+            aria-label="Idea count"
+            className="rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-xs text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
+          >
+            {[5, 10, 15, 20, 25, 30].map((n) => (
+              <option key={n} value={n}>
+                {n} ideas
+              </option>
+            ))}
+          </select>
           <button
             type="button"
-            onClick={refreshAll}
+            onClick={() => generateAll(generateCount)}
             disabled={isRefreshing}
             className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
           >
-            {isRefreshing
-              ? `Refreshing ${totalActive}/${groups.length}…`
-              : `Refresh all`}
+            {isRefreshing ? "Generating…" : "Generate"}
           </button>
         </div>
       </header>
@@ -1063,6 +1226,9 @@ export function VideoIdeasList({
                         ? accountById.get(i.integration_id) ?? null
                         : null
                     }
+                    targets={(i.target_integration_ids ?? [])
+                      .map((id) => accountById.get(id) ?? null)
+                      .filter((a): a is NonNullable<typeof a> => !!a)}
                     onOpen={() => setDetailIdeaId(i.id)}
                     onThumbsDown={() => setFeedbackIdeaId(i.id)}
                   />
@@ -1080,6 +1246,9 @@ export function VideoIdeasList({
                   ? accountById.get(i.integration_id) ?? null
                   : null
               }
+              targets={(i.target_integration_ids ?? [])
+                .map((id) => accountById.get(id) ?? null)
+                .filter((a): a is NonNullable<typeof a> => !!a)}
               onOpen={() => setDetailIdeaId(i.id)}
               onThumbsDown={() => setFeedbackIdeaId(i.id)}
             />
@@ -1144,6 +1313,9 @@ export function VideoIdeasList({
               ? accountById.get(detailIdea.integration_id) ?? null
               : null
           }
+          targets={(detailIdea.target_integration_ids ?? [])
+            .map((id) => accountById.get(id) ?? null)
+            .filter((a): a is NonNullable<typeof a> => !!a)}
           reviewingId={reviewingId}
           onClose={() => setDetailIdeaId(null)}
           onSchedule={() => {
