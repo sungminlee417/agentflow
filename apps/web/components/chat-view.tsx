@@ -735,12 +735,24 @@ export function ChatView({
               );
             })}
 
-            {/* Show dots if streaming but no text/tool blocks yet. */}
-            {pending && streamBlocks.length === 0 && (
-              <div className="text-sm">
-                <StreamingDots />
-              </div>
-            )}
+            {/* Always show a small "thinking" indicator at the bottom
+                while the agent is pending. Between tool calls there's
+                a quiet period where the model is deciding its next
+                move — without this, users see no feedback and assume
+                the chat is frozen. Skip when the last visible block
+                is itself a streaming AssistantText (its inline dots
+                cover the same signal). */}
+            {pending &&
+              !(
+                streamBlocks.length > 0 &&
+                streamBlocks[streamBlocks.length - 1]?.kind ===
+                  "assistant-text"
+              ) && (
+                <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+                  <StreamingDots />
+                  <span>Thinking…</span>
+                </div>
+              )}
 
             {/* Remote agent indicator — another tab kicked off the turn,
                  OR we navigated away mid-stream and came back. Source is

@@ -1,6 +1,7 @@
 import "@/lib/ai-bootstrap";
 import { NextResponse, type NextRequest } from "next/server";
 import { streamText, stepCountIs, type ModelMessage } from "ai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   decrypt,
@@ -23,7 +24,7 @@ function systemPromptFor(connected: string[]): string {
   const lines = [
     "You are agentflow, a personal assistant with access to the user's connected tools.",
     "Be concise. When using tools, explain what you're about to do in one short sentence, call the tool, then describe what came back.",
-    "Never invent data — if you don't know something, call a tool or ask.",
+    "Never invent data — if you don't know something, call a tool or ask. If the user asks for facts/links/research you don't have a dedicated tool for (e.g. \"where do I find public-domain orchestra footage\", \"what's the highest-rated VOD review of X right now\"), use web_search when it's available rather than refusing.",
     "Formatting: when summarising lists of items with multiple attributes (e.g. videos with title/views/likes/duration, accounts with handle/follower-count), use proper GitHub-flavoured markdown tables — `| Header | Header |` then `| --- | --- |` then data rows. Do NOT emit tab-separated text; the renderer can't infer table structure from whitespace alone.",
   ];
   const hasYouTube = connected.includes("youtube");
@@ -106,6 +107,18 @@ export async function POST(req: NextRequest) {
 
   // Resolve tools from the user's connected integrations.
   const { tools, connected } = await buildToolsForUser(supabase, user.id);
+
+  // Anthropic ships a server-side web_search tool — invoking it lets
+  // Claude pull live snippets when the user asks something we don't
+  // have a connected tool for (e.g. "public domain orchestra footage
+  // links"). Only Anthropic offers this; the OpenAI/Google paths fall
+  // through without web search.
+  if (provider === "anthropic") {
+    (tools as Record<string, unknown>).web_search = anthropic.tools.webSearch_20260209({
+      maxUses: 5,
+    });
+    connected.push("web_search");
+  }
 
   // Get-or-create the conversation row.
   let convoId = body.conversation_id;
