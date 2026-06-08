@@ -7,19 +7,14 @@ export default async function AppLayout({
   children: React.ReactNode;
 }) {
   const supabase = await createSupabaseServerClient();
-
-  const [{ data: conversations }, { data: keys }] = await Promise.all([
-    supabase
-      .from("conversations")
-      .select("id, title, updated_at")
-      .order("updated_at", { ascending: false })
-      .limit(50),
+  const [{ data: keys }, { data: userData }] = await Promise.all([
     supabase.from("user_api_keys").select("provider"),
+    supabase.auth.getUser(),
   ]);
 
   return (
     <AppShell
-      conversations={conversations ?? []}
+      userEmail={userData.user?.email ?? null}
       hasAnyKey={(keys ?? []).length > 0}
     >
       {children}

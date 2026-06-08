@@ -9,6 +9,9 @@ const STATE_COOKIE = "yt_oauth_state";
 const SCOPES = [
   "https://www.googleapis.com/auth/youtube.readonly",
   "https://www.googleapis.com/auth/yt-analytics.readonly",
+  // Required for posting comment replies via /comments?part=snippet.
+  // youtube.readonly alone is read-only; force-ssl is the write scope.
+  "https://www.googleapis.com/auth/youtube.force-ssl",
 ];
 
 export async function GET(request: NextRequest) {

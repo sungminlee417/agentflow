@@ -380,5 +380,43 @@ export function buildYouTubeTools(accounts: ProviderAccount[]) {
         });
       },
     }),
+
+    youtube_reply_to_comment: tool({
+      description:
+        "Post a reply to a YouTube comment. Requires the youtube.force-ssl scope (granted on reconnect after 2026-06-07). Returns the new reply id.",
+      inputSchema: z.object({
+        account: accountField,
+        parent_comment_id: z
+          .string()
+          .describe("The id of the comment you're replying to."),
+        text: z.string().min(1).max(10000),
+      }),
+      execute: async ({ account, parent_comment_id, text }) => {
+        const token = await tokenFor(account);
+        const res = await fetch(
+          "https://www.googleapis.com/youtube/v3/comments?part=snippet",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              snippet: { parentId: parent_comment_id, textOriginal: text },
+            }),
+          },
+        );
+        const body = await res.text();
+        if (!res.ok) {
+          throw new Error(`YouTube reply ${res.status}: ${body.slice(0, 500)}`);
+        }
+        try {
+          const json = JSON.parse(body) as { id?: string };
+          return { id: json.id ?? null };
+        } catch {
+          return { id: null };
+        }
+      },
+    }),
   };
 }

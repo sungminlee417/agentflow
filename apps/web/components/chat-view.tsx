@@ -217,10 +217,15 @@ export function ChatView({
   conversationId,
   title,
   initialMessages = [],
+  variant = "full",
 }: {
   conversationId?: string;
   title?: string | null;
   initialMessages?: StoredMessage[];
+  /** "full" = takes the viewport (h-screen) — for /chat routes.
+   *  "embedded" = takes its parent (h-full) + hides its own header
+   *  — for the floating chat FAB which has its own chrome. */
+  variant?: "full" | "embedded";
 }) {
   const router = useRouter();
   const [history, setHistory] = useState<StoredMessage[]>(initialMessages);
@@ -580,12 +585,20 @@ export function ChatView({
     !remoteAgentRunning &&
     queued.length === 0;
 
+  const isEmbedded = variant === "embedded";
   return (
-    <div className="flex h-screen flex-col bg-white dark:bg-neutral-950">
-      {/* Header – left-pad on mobile to clear the hamburger button */}
-      <header className="border-b border-neutral-200 px-4 py-3 pl-14 text-sm text-neutral-500 md:px-6 md:pl-6 dark:border-neutral-800 dark:text-neutral-400">
-        {title ?? (conversationId ? "Conversation" : "New chat")}
-      </header>
+    <div
+      className={`flex flex-col bg-white dark:bg-neutral-950 ${
+        isEmbedded ? "h-full" : "h-screen"
+      }`}
+    >
+      {/* Header — full variant only. The embedded variant lives inside
+          a parent (FAB panel) that already has its own header chrome. */}
+      {!isEmbedded && (
+        <header className="border-b border-neutral-200 px-4 py-3 text-sm text-neutral-500 md:px-6 dark:border-neutral-800 dark:text-neutral-400">
+          {title ?? (conversationId ? "Conversation" : "New chat")}
+        </header>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-8 md:px-6">
