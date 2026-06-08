@@ -149,13 +149,43 @@ export async function POST(req: NextRequest) {
     return new NextResponse(userInsertErr.message, { status: 500 });
   }
 
-  const model = getModel(provider, apiKey, userModel);
-  const modelMessages: ModelMessage[] = body.messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Load the conversation's full history from the DB rather than
+  // trusting the client's body.messages — the client's local history
+  // can lag the realtime subscription, so a fast follow-up message
+  // would otherwise omit the prior assistant turn from the model's
+  // context (silent context loss → "I'm not sure what idea you're
+  // referring to"). The user message we just inserted is already
+  // there, so we don't append it manually.
+  const { data: persistedMessages } = await supabase
+    .from("messages")
+    .select("role, content_json")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true });
 
-  const isFirstTurn = body.messages.length <= 1;
+  const model = getModel(provider, apiKey, userModel);
+  const modelMessages: ModelMessage[] = (persistedMessages ?? [])
+    // streamText supports user / assistant / tool messages. Skip
+    // system rows — system prompt is set separately below.
+    .filter(
+      (m) =>
+        m.role === "user" || m.role === "assistant" || m.role === "tool",
+    )
+    .map(
+      (m) =>
+        ({
+          role: m.role,
+          // content_json is either a raw string (legacy user message
+          // shape) or the AI SDK's parts array (persisted from
+          // response.messages in a prior onFinish). Both shapes are
+          // valid for ModelMessage when passed back to streamText.
+          content: m.content_json,
+        }) as ModelMessage,
+    );
+
+  // First-turn title gets the new user message's text. Use the
+  // persisted count rather than the client's body length so it's
+  // never miscounted by a buggy client.
+  const isFirstTurn = (persistedMessages ?? []).length <= 1;
   const conversationTitle = isFirstTurn ? lastUser.content.slice(0, 80) : null;
 
   // Insert a job row BEFORE streaming starts so the client (or any
