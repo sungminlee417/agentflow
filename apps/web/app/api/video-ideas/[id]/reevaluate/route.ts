@@ -184,25 +184,63 @@ export async function POST(
       `- ${e.field}: agent wrote "${(e.original_value ?? "").slice(0, 120)}" → creator rewrote to "${(e.edited_value ?? "").slice(0, 120)}"`,
   );
 
-  const system = `You are auditing an already-generated video idea against the creator's recent signals. Decide whether to KEEP it as-is, REFINE specific fields, or DROP it entirely.
+  const hasPrefs = !!acct.preferences && acct.preferences.trim().length > 0;
+  const system = `You are auditing a draft video idea against the creator's signals. Decide KEEP, REFINE, or DROP.
 
-OUTPUT FORMAT — STRICT JSON ONLY. Start with \`{\` end with \`}\`. Shape:
+═══════════════════════════════════════════════
+NON-NEGOTIABLE CREATOR CONSTRAINTS — read FIRST, enforce ABSOLUTELY
+═══════════════════════════════════════════════
+${hasPrefs ? acct.preferences : "(none set for this account)"}
+
+These constraints are HARD LIMITS, not preferences. They override every other signal in this prompt.
+
+ENFORCEMENT PROCEDURE:
+  1. Read the constraints above.
+  2. Read the script, hook, CTA, visual notes, and thumbnail concept.
+  3. For each constraint, check whether ANY line in the draft (spoken, on-screen, action cue, location, prop, etc.) violates it. Examples of violation:
+       - constraint: "don't film in gym" → ANY mention of gym, weights, squat rack, treadmill, "in the gym", or visual cues showing gym = VIOLATION
+       - constraint: "no face on camera" → any "point at camera", "look at lens", face-shot framing = VIOLATION
+       - constraint: "indoor only" → any "outside", "park", "street" = VIOLATION
+  4. If ANY violation exists, you MUST do one of:
+       (a) REFINE: rewrite EVERY violating field to remove the violation. The refined script/hook/visual notes must contain ZERO references to the forbidden subject. Replace forbidden locations/props with constraint-compatible alternatives (e.g. gym → home setup, weights → resistance band at desk).
+       (b) DROP: if the topic genuinely can't work without violating the constraint (e.g. "best gym machine for chest" inherently requires a gym), drop it.
+   You may NEVER return KEEP when a violation exists.
+  5. If no violations exist, evaluate against the other signals below.
+
+═══════════════════════════════════════════════
+OUTPUT FORMAT — STRICT JSON ONLY
+═══════════════════════════════════════════════
+Start with \`{\` end with \`}\`. Shape:
 {
   "verdict": "keep" | "refine" | "drop",
-  "reasoning": <1-2 sentences naming the specific signal(s) that drove the call>,
-  "refined_fields": <object with ONLY the fields you're suggesting to change; OMIT this key entirely on "keep" or "drop">
+  "reasoning": <1-2 sentences naming the specific signal(s) that drove the call. If a constraint was violated, say so explicitly.>,
+  "refined_fields": <object with ONLY the fields you're rewriting; OMIT this key entirely on "keep" or "drop">
 }
 
-THE IDEA UNDER REVIEW:
+When refining, common fields to rewrite together when removing a constraint violation:
+- script (the beat-by-beat — replace location/action/on-screen text cues that reference the forbidden subject)
+- hook (the opening line if it mentions the forbidden subject)
+- visual_notes (the shot list — strip any forbidden props/locations)
+- thumbnail_concept (replace if it depicts the forbidden subject)
+- rationale (update to reflect the new angle)
+
+═══════════════════════════════════════════════
+THE IDEA UNDER REVIEW
+═══════════════════════════════════════════════
 - Title: ${idea.title}
 - Format: ${idea.format ?? "(none)"}
 - Kind: ${idea.kind}
 - Hook: ${idea.hook ?? "(none)"}
 - Rationale (original): ${idea.rationale ?? "(none)"}
-- Script: ${(idea.script as string | null)?.slice(0, 1200) ?? "(none)"}
+- Script: ${(idea.script as string | null)?.slice(0, 1500) ?? "(none)"}
 - CTA: ${idea.cta ?? "(none)"}
-- Visual notes: ${(idea.visual_notes as string | null)?.slice(0, 400) ?? "(none)"}
+- Visual notes: ${(idea.visual_notes as string | null)?.slice(0, 500) ?? "(none)"}
+- Thumbnail concept: ${idea.thumbnail_concept ?? "(none)"}
 - Saturation warning: ${idea.saturation_warning ?? "(none)"}
+
+═══════════════════════════════════════════════
+OTHER SIGNALS (only consult after constraint check passes)
+═══════════════════════════════════════════════
 
 RECENT SETTLED REVIEWS — what's actually worked / failed since this idea was drafted:
 ${reviewLines.length > 0 ? reviewLines.join("\n") : "(no settled reviews yet)"}
@@ -213,15 +251,14 @@ ${feedbackLines.length > 0 ? feedbackLines.join("\n") : "(no rejections recorded
 RECENT EDITS — patterns the creator consistently rewrites (match this voice):
 ${editLines.length > 0 ? editLines.join("\n") : "(no edits recorded)"}
 
-PER-ACCOUNT PREFERENCES (hard constraints):
-${acct.preferences ?? "(none)"}
+═══════════════════════════════════════════════
+DECISION RULES (after constraint check)
+═══════════════════════════════════════════════
+- KEEP: no constraint violation AND no recent signal contradicts the idea AND the idea isn't redundant with something already posted.
+- REFINE: a specific signal points to a tweak. Only include fields you're actually changing. Match the creator's edit-pattern voice when present.
+- DROP: a similar format flopped, the creator rejected this exact angle, OR the topic inherently requires violating a constraint.
 
-DECISION RULES:
-- KEEP: no recent signal contradicts the idea, and the idea isn't redundant with something already posted.
-- REFINE: a specific signal points to a tweak (e.g. a similar format hit + this idea's hook doesn't match the winning hook style → rewrite the hook). Only include fields you're actually changing. Match the creator's edit-pattern voice when present.
-- DROP: a similar format flopped, or the creator's rejected this exact angle, or a hard preference is violated.
-
-Be honest about uncertainty. If signal is thin, default to KEEP — don't refine just to look busy.`;
+Be honest about uncertainty. If signal is thin AND no constraint violation, default to KEEP.`;
 
   try {
     const result = await generateText({
