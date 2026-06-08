@@ -119,11 +119,32 @@ export function InboxView({
         toast.error(`Pull failed: ${await res.text()}`);
         return;
       }
-      const json = (await res.json()) as { pulled?: number };
+      const json = (await res.json()) as {
+        pulled?: number;
+        skipped?: Array<{ label: string; reason: string }>;
+        errors?: Array<{ label: string; message: string }>;
+      };
+      // Surface skipped + error accounts BEFORE the summary so the
+      // user knows TT-was-silently-dropped instead of seeing the
+      // misleading "all caught up" toast.
+      if (json.skipped && json.skipped.length > 0) {
+        for (const s of json.skipped) {
+          toast(`${s.label} skipped — ${s.reason}`, { duration: 8000 });
+        }
+      }
+      if (json.errors && json.errors.length > 0) {
+        for (const e of json.errors) {
+          toast.error(`${e.label}: ${e.message}`, { duration: 10000 });
+        }
+      }
       if ((json.pulled ?? 0) === 0) {
-        toast.success("No new comments — you're all caught up.");
+        if (!(json.skipped?.length || json.errors?.length)) {
+          toast.success("No new comments — you're all caught up.");
+        }
       } else {
-        toast.success(`Pulled ${json.pulled} new comment${json.pulled === 1 ? "" : "s"}.`);
+        toast.success(
+          `Pulled ${json.pulled} new comment${json.pulled === 1 ? "" : "s"}.`,
+        );
       }
       router.refresh();
     } catch (err) {

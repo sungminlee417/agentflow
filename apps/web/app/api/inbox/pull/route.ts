@@ -606,9 +606,22 @@ export async function POST(req: NextRequest) {
   const apifyToken = await loadApifyKey(supabase, user.id, decrypt);
 
   const byAccount: Record<string, number> = {};
+  const skipped: Array<{
+    integration_id: string;
+    label: string;
+    provider: string;
+    reason: string;
+  }> = [];
+  const errors: Array<{
+    integration_id: string;
+    label: string;
+    provider: string;
+    message: string;
+  }> = [];
   let totalPulled = 0;
 
   for (const integration of toPull) {
+    const label = labelFor(integration);
     try {
       let comments: IncomingComment[] = [];
 
@@ -616,19 +629,23 @@ export async function POST(req: NextRequest) {
         // TT goes through Apify (no official API access until app
         // review). Skip if the user hasn't connected Apify.
         if (!apifyToken) {
-          console.warn(
-            "[inbox/pull] TT account",
-            integration.id,
-            "skipped — Apify key not configured",
-          );
+          skipped.push({
+            integration_id: integration.id,
+            label,
+            provider: "tiktok",
+            reason:
+              "Apify key not configured — Settings → Integrations → TikTok → Apify add-on.",
+          });
           continue;
         }
         if (!integration.handle) {
-          console.warn(
-            "[inbox/pull] TT account",
-            integration.id,
-            "skipped — no handle stored",
-          );
+          skipped.push({
+            integration_id: integration.id,
+            label,
+            provider: "tiktok",
+            reason:
+              "No handle stored — reconnect this TikTok account so we capture the username.",
+          });
           continue;
         }
         comments = await fetchTikTokCommentsViaApify(
@@ -723,14 +740,26 @@ export async function POST(req: NextRequest) {
         { onConflict: "integration_id" },
       );
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error(
         "[inbox/pull] integration",
         integration.id,
         "failed:",
-        err instanceof Error ? err.message : err,
+        message,
       );
+      errors.push({
+        integration_id: integration.id,
+        label,
+        provider: integration.provider,
+        message: message.slice(0, 300),
+      });
     }
   }
 
-  return NextResponse.json({ pulled: totalPulled, by_account: byAccount });
+  return NextResponse.json({
+    pulled: totalPulled,
+    by_account: byAccount,
+    skipped,
+    errors,
+  });
 }
