@@ -1,14 +1,18 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
+  Check,
   Clock,
   Image as ImageIcon,
   MessageCircle,
   Music,
+  Sparkles,
   ThumbsDown,
   Timer,
+  X,
 } from "lucide-react";
 import { Modal } from "@/components/modal";
 import {
@@ -110,6 +114,63 @@ export function IdeaDetailModal({
   onReview?: (postId?: string) => void;
 }) {
   const router = useRouter();
+  const [reevalLoading, setReevalLoading] = useState(false);
+  const [reevalResult, setReevalResult] = useState<{
+    verdict: "keep" | "refine" | "drop";
+    reasoning: string;
+    refined_fields: Record<string, string> | null;
+  } | null>(null);
+  const [applying, setApplying] = useState(false);
+
+  async function runReevaluate() {
+    if (reevalLoading) return;
+    setReevalLoading(true);
+    setReevalResult(null);
+    try {
+      const res = await fetch(`/api/video-ideas/${idea.id}/reevaluate`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        toast.error(txt || "Re-evaluation failed");
+        return;
+      }
+      const json = (await res.json()) as {
+        verdict: "keep" | "refine" | "drop";
+        reasoning: string;
+        refined_fields: Record<string, string> | null;
+      };
+      setReevalResult(json);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Re-evaluation failed");
+    } finally {
+      setReevalLoading(false);
+    }
+  }
+
+  async function applyRefinements() {
+    if (!reevalResult?.refined_fields) return;
+    setApplying(true);
+    try {
+      const res = await fetch(`/api/video-ideas/${idea.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(reevalResult.refined_fields),
+      });
+      if (!res.ok) {
+        toast.error((await res.text()) || "Apply failed");
+        return;
+      }
+      toast.success("Applied — re-fetching idea.");
+      setReevalResult(null);
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Apply failed");
+    } finally {
+      setApplying(false);
+    }
+  }
+
   const captionTabs = useMemo(() => buildCaptionTabs(idea), [idea]);
   const chipTargets: IdeasAccount[] =
     targets && targets.length > 0 ? targets : account ? [account] : [];
@@ -266,8 +327,33 @@ export function IdeaDetailModal({
           </Section>
         )}
 
+        {reevalResult && (
+          <ReevaluateResult
+            result={reevalResult}
+            applying={applying}
+            onApply={applyRefinements}
+            onDismiss={() => {
+              onDismiss?.();
+              setReevalResult(null);
+            }}
+            onClose={() => setReevalResult(null)}
+          />
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800">
           <div className="flex flex-wrap gap-2">
+            {idea.status !== "done" && (
+              <button
+                type="button"
+                onClick={runReevaluate}
+                disabled={reevalLoading}
+                title="Audit this idea against recent reviews + edits"
+                className="inline-flex items-center gap-1.5 rounded-md border border-violet-200 bg-white px-3 py-1.5 text-xs text-violet-700 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-900/60 dark:bg-neutral-900 dark:text-violet-300 dark:hover:bg-violet-950/30"
+              >
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                {reevalLoading ? "Re-evaluating…" : "Re-evaluate"}
+              </button>
+            )}
             {idea.status === "pending" && onThumbsDown && (
               <button
                 type="button"
@@ -340,5 +426,125 @@ export function IdeaDetailModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+const VERDICT_STYLES = {
+  keep: {
+    container:
+      "border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/30",
+    label: "text-emerald-900 dark:text-emerald-200",
+    badge:
+      "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
+  },
+  refine: {
+    container:
+      "border-violet-200 bg-violet-50 dark:border-violet-900/60 dark:bg-violet-950/30",
+    label: "text-violet-900 dark:text-violet-200",
+    badge:
+      "bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-300",
+  },
+  drop: {
+    container:
+      "border-rose-200 bg-rose-50 dark:border-rose-900/60 dark:bg-rose-950/30",
+    label: "text-rose-900 dark:text-rose-200",
+    badge:
+      "bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300",
+  },
+};
+
+const VERDICT_LABEL = {
+  keep: "Keep as-is",
+  refine: "Refine suggested",
+  drop: "Recommend dismissing",
+};
+
+function ReevaluateResult({
+  result,
+  applying,
+  onApply,
+  onDismiss,
+  onClose,
+}: {
+  result: {
+    verdict: "keep" | "refine" | "drop";
+    reasoning: string;
+    refined_fields: Record<string, string> | null;
+  };
+  applying: boolean;
+  onApply: () => void;
+  onDismiss: () => void;
+  onClose: () => void;
+}) {
+  const style = VERDICT_STYLES[result.verdict];
+  const fieldEntries = result.refined_fields
+    ? Object.entries(result.refined_fields).filter(([, v]) => !!v)
+    : [];
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${style.container}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Sparkles
+            className={`h-4 w-4 ${style.label}`}
+            aria-hidden="true"
+          />
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${style.badge}`}
+          >
+            {VERDICT_LABEL[result.verdict]}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close re-evaluation"
+          className="rounded-md p-1 text-neutral-500 transition hover:bg-white/60 dark:hover:bg-black/30"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </div>
+      <p className={`mt-2 text-sm ${style.label}`}>{result.reasoning}</p>
+
+      {result.verdict === "refine" && fieldEntries.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {fieldEntries.map(([field, value]) => (
+            <div
+              key={field}
+              className="rounded-md bg-white/80 px-3 py-2 text-xs dark:bg-black/20"
+            >
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                {field.replace(/_/g, " ")}
+              </div>
+              <div className="whitespace-pre-wrap text-neutral-800 dark:text-neutral-200">
+                {value}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        {result.verdict === "refine" && fieldEntries.length > 0 && (
+          <button
+            type="button"
+            onClick={onApply}
+            disabled={applying}
+            className="inline-flex items-center gap-1.5 rounded-md bg-violet-700 px-3 py-1 text-xs font-medium text-white transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Check className="h-3 w-3" aria-hidden="true" />
+            {applying ? "Applying…" : "Apply refinements"}
+          </button>
+        )}
+        {result.verdict === "drop" && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="inline-flex items-center gap-1.5 rounded-md bg-rose-700 px-3 py-1 text-xs font-medium text-white transition hover:bg-rose-800"
+          >
+            Dismiss this idea
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

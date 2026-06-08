@@ -14,5 +14,10 @@ export * from "./tools/uploads";
 export * from "./tools/video-ideas";
 export * from "./tools/video-ideas-research";
 export * from "./agents/video-ideas-agent";
+export { loadAccountContext } from "./agents/video-ideas/context";
+export type {
+  AccountContext,
+  RecentEdit,
+} from "./agents/video-ideas/context";
 export * from "./agents/video-review-agent";
 export * from "./agents/evaluate-idea-agent";

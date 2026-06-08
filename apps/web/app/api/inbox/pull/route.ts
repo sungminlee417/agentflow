@@ -6,6 +6,7 @@ import {
   getFreshAccessToken,
   getModel,
   isProvider,
+  loadApifyKey,
 } from "@agentflow/core";
 
 // POST /api/inbox/pull
@@ -203,6 +204,103 @@ async function fetchYouTubeComments(token: string): Promise<IncomingComment[]> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// TikTok fetcher (via Apify — clockworks/tiktok-scraper)
+//
+// TikTok's official Comments API requires the comment.list scope which
+// is gated behind app review. Until that lands we scrape public
+// comments via Apify. The same actor (clockworks~tiktok-scraper)
+// powers the niche-search tools elsewhere; we just pass commentsPerPost
+// so each scraped video also returns its comment thread inline.
+//
+// Sending replies still requires the official API + comment.create
+// scope — so for TT integrations the inbox UI surfaces a "Copy &
+// mark sent" affordance instead of an auto-post Send button.
+// ─────────────────────────────────────────────────────────────────────
+
+const APIFY_TT_ACTOR = "clockworks~tiktok-scraper";
+
+async function fetchTikTokCommentsViaApify(
+  apifyToken: string,
+  handle: string,
+): Promise<IncomingComment[]> {
+  // Strip leading @ if present — Apify expects the bare username.
+  const profile = handle.replace(/^@+/, "").trim();
+  if (!profile) return [];
+
+  const url = `https://api.apify.com/v2/acts/${APIFY_TT_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(
+    apifyToken,
+  )}&timeout=120&memory=1024`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      profiles: [profile],
+      resultsPerPage: RECENT_MEDIA_LIMIT,
+      shouldDownloadVideos: false,
+      shouldDownloadCovers: false,
+      shouldDownloadSubtitles: false,
+      shouldDownloadSlideshowImages: false,
+      commentsPerPost: COMMENTS_PER_MEDIA,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Apify TT ${res.status}: ${(await res.text()).slice(0, 300)}`,
+    );
+  }
+  const rows = (await res.json()) as Array<Record<string, unknown>>;
+  const out: IncomingComment[] = [];
+  for (const row of rows) {
+    const videoId = String(row.id ?? row.videoId ?? "");
+    if (!videoId) continue;
+    const videoUrl =
+      (row.webVideoUrl as string | undefined) ??
+      (row.url as string | undefined) ??
+      null;
+    const videoTitle =
+      (row.text as string | undefined)?.slice(0, 200) ??
+      (row.caption as string | undefined)?.slice(0, 200) ??
+      null;
+    const createIso =
+      typeof row.createTimeISO === "string" ? row.createTimeISO : null;
+
+    // The actor places comments under `comments` (sometimes `latestComments`
+    // depending on version). Accept both.
+    const rawComments =
+      (row.comments as Array<Record<string, unknown>> | undefined) ??
+      (row.latestComments as Array<Record<string, unknown>> | undefined) ??
+      [];
+    for (const c of rawComments) {
+      const cid = String(c.cid ?? c.id ?? "");
+      const text = (c.text as string | undefined) ?? "";
+      if (!cid || !text) continue;
+      const user = c.user as Record<string, unknown> | undefined;
+      const username =
+        (user?.uniqueId as string | undefined) ??
+        (c.uniqueId as string | undefined) ??
+        (c.username as string | undefined) ??
+        null;
+      const ts =
+        typeof c.createTimeISO === "string"
+          ? c.createTimeISO
+          : typeof c.createTime === "number"
+            ? new Date(c.createTime * 1000).toISOString()
+            : null;
+      out.push({
+        source_comment_id: cid,
+        source_author: username,
+        source_text: text,
+        source_video_id: videoId,
+        source_video_url: videoUrl,
+        source_video_title: videoTitle,
+        source_posted_at: ts ?? createIso,
+      });
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // AI draft generation
 // ─────────────────────────────────────────────────────────────────────
 
@@ -342,10 +440,10 @@ async function generateDraftsForComments(
 // Route handler
 // ─────────────────────────────────────────────────────────────────────
 
-const SUPPORTED_PROVIDERS = new Set(["instagram", "youtube"]);
-// TikTok comment reply requires app-review scopes (comment.create) we
-// don't have yet. The pull route silently skips TT accounts; once the
-// scope is granted, add "tiktok" here + a fetchTikTokComments helper.
+const SUPPORTED_PROVIDERS = new Set(["instagram", "youtube", "tiktok"]);
+// TikTok reads via Apify (gray-ToS scrape of public comments). TT
+// SENDS still require app-review scopes — the inbox UI surfaces a
+// "Copy & mark sent" affordance for TT cards instead of auto-post.
 
 export async function POST(req: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -382,28 +480,56 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ pulled: 0, by_account: {} });
   }
 
+  // Apify token is shared across all TT accounts; load once per request.
+  const apifyToken = await loadApifyKey(supabase, user.id, decrypt);
+
   const byAccount: Record<string, number> = {};
   let totalPulled = 0;
 
   for (const integration of toPull) {
     try {
-      const token = await getFreshAccessToken(
-        supabase,
-        user.id,
-        integration.provider as "youtube" | "instagram",
-        {
-          id: integration.id,
-          encrypted_access_token: integration.encrypted_access_token,
-          encrypted_refresh_token: integration.encrypted_refresh_token,
-          expires_at: integration.expires_at,
-        },
-      );
-
       let comments: IncomingComment[] = [];
-      if (integration.provider === "instagram") {
-        comments = await fetchInstagramComments(token);
-      } else if (integration.provider === "youtube") {
-        comments = await fetchYouTubeComments(token);
+
+      if (integration.provider === "tiktok") {
+        // TT goes through Apify (no official API access until app
+        // review). Skip if the user hasn't connected Apify.
+        if (!apifyToken) {
+          console.warn(
+            "[inbox/pull] TT account",
+            integration.id,
+            "skipped — Apify key not configured",
+          );
+          continue;
+        }
+        if (!integration.handle) {
+          console.warn(
+            "[inbox/pull] TT account",
+            integration.id,
+            "skipped — no handle stored",
+          );
+          continue;
+        }
+        comments = await fetchTikTokCommentsViaApify(
+          apifyToken,
+          integration.handle,
+        );
+      } else {
+        const token = await getFreshAccessToken(
+          supabase,
+          user.id,
+          integration.provider as "youtube" | "instagram",
+          {
+            id: integration.id,
+            encrypted_access_token: integration.encrypted_access_token,
+            encrypted_refresh_token: integration.encrypted_refresh_token,
+            expires_at: integration.expires_at,
+          },
+        );
+        if (integration.provider === "instagram") {
+          comments = await fetchInstagramComments(token);
+        } else if (integration.provider === "youtube") {
+          comments = await fetchYouTubeComments(token);
+        }
       }
 
       // Dedupe against existing rows.

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   CheckCircle2,
+  Clipboard,
   ExternalLink,
   Inbox as InboxIcon,
   RefreshCw,
@@ -79,6 +80,12 @@ export function InboxView({
     return m;
   }, [accounts]);
 
+  const replies_byId = useMemo(() => {
+    const m = new Map<string, ReplyRow>();
+    for (const r of replies) m.set(r.id, r);
+    return m;
+  }, [replies]);
+
   const baseForView = useMemo(() => {
     if (view === "draft") return replies.filter((r) => r.status === "draft" || r.status === "failed");
     if (view === "sent") return replies.filter((r) => r.status === "sent");
@@ -151,6 +158,46 @@ export function InboxView({
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setSendingId(null);
+    }
+  }
+
+  // TikTok-specific: copy the reply to clipboard and mark sent. We can't
+  // auto-post via API until TT app-review grants the comment.create
+  // scope; in the meantime the user pastes it manually in the TT app.
+  async function copyAndMarkSent(id: string) {
+    setSendingId(id);
+    const draft = edits[id];
+    try {
+      if (draft !== undefined) {
+        await fetch(`/api/inbox/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ draft_text: draft }),
+        });
+      }
+      const replies = replies_byId.get(id);
+      const textToCopy = draft ?? replies?.draft_text ?? "";
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+      } catch {
+        toast.error("Couldn't copy to clipboard — copy manually.");
+      }
+      const res = await fetch(`/api/inbox/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "sent" }),
+      });
+      if (!res.ok) {
+        toast.error(`Mark-sent failed: ${await res.text()}`);
+        router.refresh();
+        return;
+      }
+      toast.success("Copied. Paste in TikTok and you're done.");
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Copy failed");
     } finally {
       setSendingId(null);
     }
@@ -292,7 +339,11 @@ export function InboxView({
             account={accountById.get(r.integration_id) ?? null}
             edited={edits[r.id]}
             onEdit={(text) => setEdits((e) => ({ ...e, [r.id]: text }))}
-            onSend={() => send(r.id)}
+            onSend={() =>
+              r.platform === "tiktok"
+                ? copyAndMarkSent(r.id)
+                : send(r.id)
+            }
             onDismiss={() => dismiss(r.id)}
             onDelete={() => remove(r.id)}
             sending={sendingId === r.id}
@@ -394,15 +445,28 @@ function ReplyCard({
               <X className="mr-1 inline h-3 w-3" aria-hidden="true" />
               Dismiss
             </button>
-            <button
-              type="button"
-              onClick={onSend}
-              disabled={sending || text.trim().length === 0}
-              className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-            >
-              <Send className="h-3 w-3" aria-hidden="true" />
-              {sending ? "Sending…" : "Send"}
-            </button>
+            {r.platform === "tiktok" ? (
+              <button
+                type="button"
+                onClick={onSend}
+                disabled={sending || text.trim().length === 0}
+                title="TikTok doesn't allow auto-replies yet — this copies your reply to the clipboard so you can paste it in the app."
+                className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+              >
+                <Clipboard className="h-3 w-3" aria-hidden="true" />
+                {sending ? "Copying…" : "Copy & mark sent"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSend}
+                disabled={sending || text.trim().length === 0}
+                className="inline-flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+              >
+                <Send className="h-3 w-3" aria-hidden="true" />
+                {sending ? "Sending…" : "Send"}
+              </button>
+            )}
           </div>
         </>
       ) : (

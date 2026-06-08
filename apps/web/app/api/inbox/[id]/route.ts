@@ -30,8 +30,13 @@ export async function PATCH(
   }
   if (body.status === "dismissed") {
     patch.status = "dismissed";
+  } else if (body.status === "sent") {
+    // Manual-send acknowledgement (TikTok pasted-by-hand flow). The
+    // /send route handles the auto-post case for IG + YT.
+    patch.status = "sent";
+    patch.sent_at = new Date().toISOString();
   } else if (body.status !== undefined) {
-    return new NextResponse("Invalid status (only 'dismissed' allowed here)", {
+    return new NextResponse("Invalid status (only 'dismissed' / 'sent')", {
       status: 400,
     });
   }
