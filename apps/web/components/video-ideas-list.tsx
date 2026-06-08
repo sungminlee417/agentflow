@@ -975,10 +975,15 @@ export function VideoIdeasList({
                 setFilterAccountId(active ? null : acct.id)
               }
               title={accountTitle(acct)}
-              className={`group inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+              // Always reserve a 2px inset ring slot — color it neutral
+              // when active, transparent otherwise. Without this the
+              // active-only `ring-2` ate part of the chip-row gap on
+              // one side only, creating asymmetric visual rhythm
+              // against neighbours that read as CLS.
+              className={`group inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ring-2 ring-inset transition ${
                 active
-                  ? "ring-2 ring-neutral-900 dark:ring-neutral-100"
-                  : "hover:brightness-95 dark:hover:brightness-110"
+                  ? "ring-neutral-900 dark:ring-neutral-100"
+                  : "ring-transparent hover:brightness-95 dark:hover:brightness-110"
               } ${chipClass}`}
             >
               <span className="font-semibold uppercase tracking-wide">
