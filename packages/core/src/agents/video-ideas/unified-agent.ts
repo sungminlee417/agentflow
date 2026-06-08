@@ -103,6 +103,7 @@ const VIDEO_IDEAS_CRUD_TOOLS = new Set([
   "video_ideas_delete",
   "video_ideas_mark_posted",
   "video_ideas_evaluate",
+  "video_ideas_reevaluate",
   "video_ideas_run_review",
 ]);
 

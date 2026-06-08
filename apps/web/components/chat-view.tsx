@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/markdown";
 import { ToolStep } from "@/components/tool-step";
@@ -307,6 +307,11 @@ export function ChatView({
   variant?: "full" | "embedded";
 }) {
   const router = useRouter();
+  // Unique per-mount id so the realtime channel name doesn't collide
+  // when /chat/[id] and the FAB chat both mount ChatView for the same
+  // conversation (Supabase rejects a second .on() on a channel that's
+  // already .subscribe()d).
+  const instanceId = useId();
   const [history, setHistory] = useState<StoredMessage[]>(initialMessages);
   const [convoId, setConvoId] = useState<string | undefined>(conversationId);
   const [pendingUserText, setPendingUserText] = useState<string | null>(null);
@@ -352,7 +357,7 @@ export function ChatView({
     const supabase = createSupabaseBrowserClient();
 
     const channel = supabase
-      .channel(`chat_${convoId}`)
+      .channel(`chat_${convoId}_${instanceId}`)
       .on(
         "postgres_changes",
         {
@@ -423,7 +428,7 @@ export function ChatView({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [convoId]);
+  }, [convoId, instanceId]);
 
   const historyBlocks = useMemo(() => flattenHistory(history), [history]);
   const streamBlocks = useMemo(

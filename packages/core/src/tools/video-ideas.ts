@@ -11,6 +11,7 @@ import {
   runEvaluateIdea,
   persistEvaluatedIdea,
 } from "../agents/evaluate-idea-agent";
+import { reevaluateIdea } from "../agents/reevaluate-idea";
 
 // Video-ideas CRUD tools for the chat agent.
 //
@@ -249,6 +250,28 @@ export function buildVideoIdeasTools(
           .eq("user_id", userId)
           .eq("id", id);
         return { ok: !error, error: error?.message };
+      },
+    }),
+
+    video_ideas_reevaluate: tool({
+      description:
+        "Audit an existing video idea against the creator's recent signals (settled reviews, thumbs-down rejections, inline edits, per-account preferences/constraints). Returns { verdict: 'keep' | 'refine' | 'drop', reasoning, refined_fields? }. Use this AFTER any video_ideas_update — the natural flow is: edit a field, then re-evaluate to check if the result still fits. On 'refine' you can chain video_ideas_update with the returned refined_fields to apply the AI's suggested rewrites. On 'drop' chain video_ideas_set_status with 'dismissed'. On 'keep' no follow-up needed.",
+      inputSchema: z.object({
+        id: z.string().uuid(),
+      }),
+      execute: async ({ id }) => {
+        const result = await reevaluateIdea({
+          supabase,
+          userId,
+          ideaId: id,
+        });
+        if (!result.ok) return { ok: false, error: result.error };
+        return {
+          ok: true,
+          verdict: result.verdict,
+          reasoning: result.reasoning,
+          refined_fields: result.refined_fields,
+        };
       },
     }),
 
