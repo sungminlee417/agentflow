@@ -996,15 +996,11 @@ export function VideoIdeasList({
             </button>
           );
         })}
-        {filterAccountId && (
-          <button
-            type="button"
-            onClick={() => setFilterAccountId(null)}
-            className="rounded-full border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-900"
-          >
-            Clear filter
-          </button>
-        )}
+        {/* Clear-filter affordance is the active chip itself — click
+         *  again to clear. Adding a separate "Clear filter" button into
+         *  this flex-wrap row caused CLS because it only mounted when
+         *  filterAccountId was truthy, pushing the chip row's wrap
+         *  layout on every toggle. */}
       </div>
 
       {isRefreshing && (
