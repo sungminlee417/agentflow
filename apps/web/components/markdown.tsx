@@ -72,6 +72,37 @@ export function Markdown({ children }: { children: string }) {
         hr: () => (
           <hr className="my-4 border-neutral-200 dark:border-neutral-800" />
         ),
+        // GFM table styling — without these the table renders unstyled
+        // and looks like a wall of tab-separated text. remark-gfm is
+        // already enabled above so | col | col | syntax is parsed.
+        table: ({ children }) => (
+          <div className="my-3 overflow-x-auto">
+            <table className="w-full border-collapse text-xs">
+              {children}
+            </table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead className="border-b border-neutral-300 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900">
+            {children}
+          </thead>
+        ),
+        tbody: ({ children }) => <tbody>{children}</tbody>,
+        tr: ({ children }) => (
+          <tr className="border-b border-neutral-200 last:border-0 dark:border-neutral-800">
+            {children}
+          </tr>
+        ),
+        th: ({ children }) => (
+          <th className="px-2 py-1.5 text-left font-semibold text-neutral-700 dark:text-neutral-300">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="px-2 py-1.5 align-top text-neutral-800 dark:text-neutral-200">
+            {children}
+          </td>
+        ),
       }}
     >
       {children}

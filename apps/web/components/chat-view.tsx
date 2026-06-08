@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/markdown";
 import { ToolStep } from "@/components/tool-step";
@@ -165,7 +165,9 @@ async function* readSseEvents(
   }
 }
 
-function UserBubble({ text }: { text: string }) {
+// Memoized so typing in ChatInput (which lives in a sibling subtree)
+// doesn't re-render every existing bubble in a long conversation.
+const UserBubble = memo(function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
       <div className="max-w-[80%] rounded-2xl bg-neutral-100 px-4 py-2.5 text-sm whitespace-pre-wrap text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
@@ -173,7 +175,7 @@ function UserBubble({ text }: { text: string }) {
       </div>
     </div>
   );
-}
+});
 
 function StreamingDots() {
   return (
@@ -194,7 +196,10 @@ function StreamingDots() {
   );
 }
 
-function AssistantText({
+// Memoized — Markdown rendering is the most expensive thing in the
+// chat tree (react-markdown re-parses the AST on every render). With
+// React.memo the AST is cached as long as `text` is stable.
+const AssistantText = memo(function AssistantText({
   text,
   streaming,
 }: {
@@ -211,7 +216,81 @@ function AssistantText({
       )}
     </div>
   );
-}
+});
+
+// Re-export the memoized ToolStep so its renders are also stable
+// when ChatView's surrounding state churns (e.g. queued messages,
+// pendingUserText flips). Falls through to the implementation.
+const MemoToolStep = memo(ToolStep);
+
+// Isolated input subtree. Holds its OWN draft state — keystrokes don't
+// bubble re-renders to the parent ChatView (which renders the history
+// + Markdown content and was the source of the per-keystroke lag).
+// Only fires `onSend` on submit, plus an `initialDraft` prop for the
+// "failed send → put text back into the input" recovery path.
+const ChatInput = memo(function ChatInput({
+  onSend,
+  isBusy,
+  initialDraft,
+}: {
+  onSend: (text: string) => void;
+  isBusy: boolean;
+  initialDraft: string;
+}) {
+  const [draft, setDraft] = useState(initialDraft);
+  // When the parent stuffs text back into the input (failed send
+  // recovery), pick it up.
+  useEffect(() => {
+    if (initialDraft && initialDraft !== draft) {
+      setDraft(initialDraft);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDraft]);
+
+  function submit() {
+    const text = draft.trim();
+    if (!text) return;
+    setDraft("");
+    onSend(text);
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      className="border-t border-neutral-200 bg-white px-4 py-4 md:px-6 dark:border-neutral-800 dark:bg-neutral-950"
+    >
+      <div className="mx-auto flex max-w-3xl gap-2">
+        <textarea
+          rows={1}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder={
+            isBusy
+              ? "Send a message… (will queue after this turn)"
+              : "Send a message…"
+          }
+          className="flex-1 resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
+        />
+        <button
+          type="submit"
+          disabled={draft.trim().length === 0}
+          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+        >
+          {isBusy ? "Queue" : "Send"}
+        </button>
+      </div>
+    </form>
+  );
+});
 
 export function ChatView({
   conversationId,
@@ -232,7 +311,9 @@ export function ChatView({
   const [convoId, setConvoId] = useState<string | undefined>(conversationId);
   const [pendingUserText, setPendingUserText] = useState<string | null>(null);
   const [streamParts, setStreamParts] = useState<StreamPart[]>([]);
-  const [input, setInput] = useState("");
+  // restoreDraft: when a send fails we push the failed text back into
+  // ChatInput's textarea via this prop so the user can edit + retry.
+  const [restoreDraft, setRestoreDraft] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Detached agent run on the server (e.g. another tab triggered it, or
@@ -539,9 +620,9 @@ export function ChatView({
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      // On failure, surface the failed text back into the input rather
-      // than losing it. Don't requeue — the user can edit and retry.
-      setInput((cur) => cur || text);
+      // On failure, push the failed text back into ChatInput so the
+      // user can edit and retry. Don't requeue.
+      setRestoreDraft(text);
     } finally {
       setPending(false);
       // Don't clear pendingUserText / streamParts here — the useEffect
@@ -562,14 +643,13 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, remoteAgentRunning, queued]);
 
-  function send(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
+  // ChatInput owns its own draft state now and only calls back here on
+  // submit. We clear restoreDraft so a previously-failed message
+  // doesn't keep getting re-pushed into the textarea.
+  function send(text: string) {
     if (!text) return;
-    setInput("");
+    setRestoreDraft("");
     setError(null);
-    // If a turn is in flight (locally or via another tab), queue this
-    // one and let the drain effect pick it up. Otherwise dispatch now.
     if (pending || remoteAgentRunning) {
       setQueued((q) => [...q, text]);
     } else {
@@ -618,7 +698,7 @@ export function ChatView({
               if (b.kind === "assistant-text")
                 return <AssistantText key={b.key} text={b.text} />;
               return (
-                <ToolStep
+                <MemoToolStep
                   key={b.key}
                   name={b.name}
                   input={b.input}
@@ -645,7 +725,7 @@ export function ChatView({
                 );
               }
               return (
-                <ToolStep
+                <MemoToolStep
                   key={b.key}
                   name={b.name}
                   input={b.input}
@@ -694,37 +774,11 @@ export function ChatView({
         </div>
       </div>
 
-      <form
-        onSubmit={send}
-        className="border-t border-neutral-200 bg-white px-4 py-4 md:px-6 dark:border-neutral-800 dark:bg-neutral-950"
-      >
-        <div className="mx-auto flex max-w-3xl gap-2">
-          <textarea
-            rows={1}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send(e as unknown as React.FormEvent);
-              }
-            }}
-            placeholder={
-              pending || remoteAgentRunning
-                ? "Send a message… (will queue after this turn)"
-                : "Send a message…"
-            }
-            className="flex-1 resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
-          />
-          <button
-            type="submit"
-            disabled={input.trim().length === 0}
-            className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-          >
-            {pending || remoteAgentRunning ? "Queue" : "Send"}
-          </button>
-        </div>
-      </form>
+      <ChatInput
+        onSend={send}
+        isBusy={pending || remoteAgentRunning}
+        initialDraft={restoreDraft}
+      />
     </div>
   );
 }
