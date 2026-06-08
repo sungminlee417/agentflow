@@ -301,7 +301,10 @@ export function ChatView({
   conversationId?: string;
   title?: string | null;
   initialMessages?: StoredMessage[];
-  /** "full" = takes the viewport (h-screen) — for /chat routes.
+  /** "full" = takes the viewport (h-screen). Currently no callers
+   *  in production — chat lives in the FAB ("embedded") since the
+   *  /chat routes were retired. Kept as the default for hypothetical
+   *  full-page usage later.
    *  "embedded" = takes its parent (h-full) + hides its own header
    *  — for the floating chat FAB which has its own chrome. */
   variant?: "full" | "embedded";
@@ -611,13 +614,11 @@ export function ChatView({
         handleStreamEvent(ev);
       }
 
-      // For a freshly-created conversation, update the URL silently —
-      // window.history (not router.replace) avoids remounting ChatView
-      // and wiping streamParts. The next browser refresh will land on
-      // /chat/[id] cleanly because the URL is real.
+      // Adopt the server-issued conversation id for the rest of this
+      // session so realtime subscribes to the right channel. Chat
+      // lives inside the FAB now — there's no /chat/[id] URL to mirror.
       if (!convoId && newConvoId) {
         setConvoId(newConvoId);
-        window.history.replaceState({}, "", `/chat/${newConvoId}`);
       }
       // Refresh the layout (sidebar conversations list) and the page
       // (pulls newly-persisted messages into initialMessages). ChatView

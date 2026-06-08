@@ -18,18 +18,12 @@ export default function NotFound() {
         <p className="mt-2 text-sm text-neutral-500">
           The link might be broken, or the page might have moved.
         </p>
-        <div className="mt-6 flex items-center justify-center gap-3">
+        <div className="mt-6 flex items-center justify-center">
           <Link
             href="/video-ideas"
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
           >
             Go to Video ideas
-          </Link>
-          <Link
-            href="/chat"
-            className="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-          >
-            New chat
           </Link>
         </div>
       </div>
