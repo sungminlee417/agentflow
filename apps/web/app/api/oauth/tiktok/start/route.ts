@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes, createHash } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { getOAuthCredentials, managerForProvider } from "@agentflow/core";
+import { getOAuthCredentials } from "@agentflow/core";
 import { publicUrl } from "@/lib/public-url";
 
 const STATE_COOKIE = "tt_oauth_state";
@@ -25,12 +25,8 @@ export async function GET(request: NextRequest) {
 
   const creds = await getOAuthCredentials(supabase, user.id, "tiktok");
   if (!creds) {
-    const landing =
-      managerForProvider("tiktok")?.slug
-        ? `/managers/${managerForProvider("tiktok")!.slug}`
-        : "/settings";
     return NextResponse.redirect(
-      publicUrl(request, `${landing}?error=oauth_app_not_configured`),
+      publicUrl(request, "/integrations?error=oauth_app_not_configured"),
     );
   }
 

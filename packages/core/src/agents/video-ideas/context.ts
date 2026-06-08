@@ -15,6 +15,12 @@ import type { RecentFeedback, RecentReview } from "./types";
 // state. The generator can still run on partial context (e.g. fresh
 // account with no reviews yet).
 
+export type RecentEdit = {
+  field: string;
+  original_value: string | null;
+  edited_value: string | null;
+};
+
 export type AccountContext = {
   integration: IntegrationRow;
   /** User-facing label: account_label ?? display_name ?? handle ?? "platform (id8)". */
@@ -22,6 +28,10 @@ export type AccountContext = {
   recentReviews: RecentReview[];
   recentFeedback: RecentFeedback[];
   preferences: string | null;
+  /** Recent substantive edits the user made to ideas for this account.
+   *  Feeds the learning loop — the prompt instructs the agent to nudge
+   *  its voice toward the edited_value patterns. */
+  recentEdits: RecentEdit[];
 };
 
 function labelFor(integration: IntegrationRow): string {
@@ -38,10 +48,11 @@ export async function loadAccountContext(
   userId: string,
   integration: IntegrationRow,
 ): Promise<AccountContext> {
-  const [reviews, feedback, prefs] = await Promise.all([
+  const [reviews, feedback, prefs, edits] = await Promise.all([
     loadRecentReviews(supabase, userId, integration.id),
     loadRecentFeedback(supabase, userId, integration.id),
     loadPreferences(supabase, userId, integration.id),
+    loadRecentEdits(supabase, userId, integration.id),
   ]);
   return {
     integration,
@@ -49,7 +60,36 @@ export async function loadAccountContext(
     recentReviews: reviews,
     recentFeedback: feedback,
     preferences: prefs,
+    recentEdits: edits,
   };
+}
+
+async function loadRecentEdits(
+  supabase: SupabaseClient,
+  userId: string,
+  integrationId: string,
+): Promise<RecentEdit[]> {
+  try {
+    const { data } = await supabase
+      .from("video_idea_edits")
+      .select("field, original_value, edited_value")
+      .eq("user_id", userId)
+      .eq("integration_id", integrationId)
+      .order("created_at", { ascending: false })
+      .limit(12);
+    return ((data ?? []) as RecentEdit[]).map((r) => ({
+      field: r.field,
+      original_value: r.original_value,
+      edited_value: r.edited_value,
+    }));
+  } catch (err) {
+    console.error(
+      "[video-ideas/context] loadRecentEdits failed:",
+      integrationId,
+      err,
+    );
+    return [];
+  }
 }
 
 async function loadRecentReviews(

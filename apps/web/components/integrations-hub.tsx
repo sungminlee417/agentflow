@@ -30,9 +30,9 @@ export type ConnectedAccount = {
 };
 
 export type ProviderGroup = {
-  provider: "github" | "youtube" | "tiktok" | "instagram";
+  provider: "youtube" | "tiktok" | "instagram";
   label: string;
-  group: "code" | "social";
+  group: "social";
   description: string;
   hint?: string;
   accounts: ConnectedAccount[];
@@ -401,7 +401,6 @@ export function IntegrationsHub({
   const [open, setOpen] = useState<string | null>(null);
   const [tiktokModalOpen, setTiktokModalOpen] = useState(false);
 
-  const codeProviders = providers.filter((i) => i.group === "code");
   const socialProviders = providers.filter((i) => i.group === "social");
 
   return (
@@ -425,21 +424,6 @@ export function IntegrationsHub({
         <div className="mt-6">
           <ConnectResultBanner result={connectResult} providers={providers} />
         </div>
-      )}
-
-      {codeProviders.length > 0 && (
-        <section className="mt-10">
-          <GroupLabel>Code</GroupLabel>
-          <div className="space-y-3">
-            {codeProviders.map((p) => (
-              <Row
-                key={p.provider}
-                p={p}
-                onConfigure={() => setOpen(p.provider)}
-              />
-            ))}
-          </div>
-        </section>
       )}
 
       {socialProviders.length > 0 && (

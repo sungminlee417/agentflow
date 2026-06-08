@@ -192,9 +192,5 @@ async function callRefreshEndpoint(
       };
     }
 
-    case "github":
-      // GitHub OAuth tokens don't expire by default (only GitHub Apps
-      // do, and we'd implement that separately). Nothing to refresh.
-      return null;
   }
 }

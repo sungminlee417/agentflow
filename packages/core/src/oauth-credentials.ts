@@ -13,16 +13,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // Returns null if env vars aren't set — that path produces a clean
 // "oauth_app_not_configured" redirect on the integrations page.
 
-export type OAuthProvider = "github" | "youtube" | "tiktok" | "instagram";
+export type OAuthProvider = "youtube" | "tiktok" | "instagram";
 
 const ENV_KEYS: Record<
   OAuthProvider,
   { idVar: string; secretVar: string }
 > = {
-  github: {
-    idVar: "GITHUB_OAUTH_CLIENT_ID",
-    secretVar: "GITHUB_OAUTH_CLIENT_SECRET",
-  },
   youtube: {
     idVar: "GOOGLE_OAUTH_CLIENT_ID",
     secretVar: "GOOGLE_OAUTH_CLIENT_SECRET",

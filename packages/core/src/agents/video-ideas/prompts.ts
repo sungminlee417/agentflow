@@ -112,6 +112,40 @@ function feedbackBlock(items: RecentFeedback[]): string {
   return lines.join("\n");
 }
 
+type RecentEditLite = {
+  field: string;
+  original_value: string | null;
+  edited_value: string | null;
+};
+
+function editsBlock(edits: RecentEditLite[]): string {
+  if (edits.length === 0) return "";
+  // Cap each value snippet so the block stays bounded — the model
+  // needs the pattern, not the full text.
+  const snip = (s: string | null) =>
+    s ? (s.length > 200 ? s.slice(0, 200) + "…" : s) : "(empty)";
+  // Group by field so the model sees repeated rewrite patterns per
+  // shape (e.g. "creator edits hook → shorter") not interleaved noise.
+  const byField = new Map<string, RecentEditLite[]>();
+  for (const e of edits) {
+    const arr = byField.get(e.field) ?? [];
+    arr.push(e);
+    byField.set(e.field, arr);
+  }
+  const lines: string[] = [
+    "",
+    "Recent edits the creator made to ideas you generated — these are the creator's final form, the one they actually shipped. Match this voice for new ideas (especially when a field appears multiple times: it's a consistent rewrite pattern, not a one-off):",
+  ];
+  for (const [field, items] of byField) {
+    lines.push(`- ${field} (${items.length}×):`);
+    for (const e of items) {
+      lines.push(`    you wrote: "${snip(e.original_value)}"`);
+      lines.push(`    creator: "${snip(e.edited_value)}"`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function preferencesBlock(preferences: string | null): string {
   if (!preferences || !preferences.trim()) return "";
   return `
@@ -720,14 +754,16 @@ function perAccountContextBlock(accounts: AccountContext[]): string {
     const reviews = reviewsBlock(a.recentReviews);
     const feedback = feedbackBlock(a.recentFeedback);
     const prefs = preferencesBlock(a.preferences);
-    if (!reviews && !feedback && !prefs) {
+    const edits = editsBlock(a.recentEdits ?? []);
+    if (!reviews && !feedback && !prefs && !edits) {
       sections.push(
-        "(No reviewed posts, rejected ideas, or per-account preferences yet — generate based on tool research.)",
+        "(No reviewed posts, rejected ideas, edits, or per-account preferences yet — generate based on tool research.)",
       );
     } else {
       if (reviews) sections.push(reviews);
       if (feedback) sections.push(feedback);
       if (prefs) sections.push(prefs);
+      if (edits) sections.push(edits);
     }
   }
   return sections.join("\n");

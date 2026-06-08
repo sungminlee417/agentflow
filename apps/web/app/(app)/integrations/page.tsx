@@ -20,20 +20,11 @@ import { type UploadRow } from "@/components/analytics-upload";
 const OAUTH_PROVIDERS: Array<{
   provider: OAuthProvider;
   label: string;
-  group: "code" | "social";
+  group: "social";
   description: string;
   hintTemplate: string;
   uploadHint?: { label: string; description: string };
 }> = [
-  {
-    provider: "github",
-    label: "GitHub",
-    group: "code",
-    description:
-      "Read code, manage issues, and open PRs on your behalf.",
-    hintTemplate:
-      "Create your OAuth app at https://github.com/settings/developers. Set the Authorization callback URL to {callback}.",
-  },
   {
     provider: "youtube",
     label: "YouTube",

@@ -4,9 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import {
-  Activity,
   AlertTriangle,
-  Code2,
   Cog,
   LogOut,
   MessageSquare,
@@ -15,7 +13,6 @@ import {
   Video,
 } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { MANAGERS } from "@agentflow/core";
 
 type ConversationSummary = {
   id: string;
@@ -66,9 +63,6 @@ export function Sidebar({
     ? conversations
     : conversations.slice(0, MAX_VISIBLE_CONVOS);
 
-  // Only render "Code" if the GitHub-backed manager has anything to do.
-  const codeManager = MANAGERS.find((m) => m.slug === "code");
-
   return (
     <aside className="flex h-full flex-col border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950">
       {/* Brand */}
@@ -92,30 +86,6 @@ export function Sidebar({
             <span className="flex items-center gap-2">
               <Video className={ICON_CLS} aria-hidden="true" />
               <span>Video ideas</span>
-            </span>
-          </Link>
-          {codeManager && (
-            <Link
-              href={`/managers/${codeManager.slug}`}
-              onClick={onClose}
-              className={navLinkClass(
-                isActive(`/managers/${codeManager.slug}`),
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <Code2 className={ICON_CLS} aria-hidden="true" />
-                <span>{codeManager.label}</span>
-              </span>
-            </Link>
-          )}
-          <Link
-            href="/activity"
-            onClick={onClose}
-            className={navLinkClass(isActive("/activity"))}
-          >
-            <span className="flex items-center gap-2">
-              <Activity className={ICON_CLS} aria-hidden="true" />
-              <span>Activity</span>
             </span>
           </Link>
         </nav>

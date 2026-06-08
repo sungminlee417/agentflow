@@ -49,8 +49,12 @@ export function ViralityRow({
 }: {
   Icon: LucideIcon;
   label: string;
-  value: string;
+  /** Null = render empty-state placeholder rather than skip — keeps
+   *  every virality field visible in the editor even before the agent
+   *  has populated it. */
+  value: string | null | undefined;
 }) {
+  const display = value && value.trim().length > 0 ? value : null;
   return (
     <div className="flex items-start gap-2">
       <Icon
@@ -61,8 +65,10 @@ export function ViralityRow({
         <div className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">
           {label}
         </div>
-        <div className="text-xs text-neutral-800 dark:text-neutral-200">
-          {value}
+        <div
+          className={`text-xs ${display ? "text-neutral-800 dark:text-neutral-200" : "text-neutral-400 italic"}`}
+        >
+          {display ?? "(empty)"}
         </div>
       </div>
     </div>

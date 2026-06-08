@@ -2,7 +2,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "../crypto";
 import { getFreshAccessToken } from "../oauth-refresh";
 import type { OAuthProvider } from "../oauth-credentials";
-import { buildGitHubTools } from "./github";
 import { buildYouTubeTools } from "./youtube";
 import { buildTikTokTools } from "./tiktok";
 import { buildInstagramTools } from "./instagram";
@@ -125,19 +124,16 @@ export async function buildToolsForIntegrations(
   const tools: Record<string, unknown> = {};
   const connected: string[] = [];
 
-  // Group by provider so refreshable-provider builders see ALL accounts
-  // for their provider at once.
+  // Group by provider so each per-provider builder sees ALL accounts
+  // for its provider at once (every supported provider is refreshable
+  // now that GitHub has been removed).
   const byProvider = new Map<string, IntegrationRow[]>();
-  const nonRefreshable: IntegrationRow[] = [];
   for (const i of integrations) {
     if (!i.encrypted_access_token) continue;
-    if (REFRESHABLE_PROVIDERS.has(i.provider as OAuthProvider)) {
-      const arr = byProvider.get(i.provider) ?? [];
-      arr.push(i);
-      byProvider.set(i.provider, arr);
-    } else {
-      nonRefreshable.push(i);
-    }
+    if (!REFRESHABLE_PROVIDERS.has(i.provider as OAuthProvider)) continue;
+    const arr = byProvider.get(i.provider) ?? [];
+    arr.push(i);
+    byProvider.set(i.provider, arr);
   }
 
   for (const [provider, rows] of byProvider) {
@@ -160,25 +156,6 @@ export async function buildToolsForIntegrations(
     } catch (err) {
       console.error(
         `Failed to prepare ${provider} tools for user ${userId}:`,
-        err,
-      );
-    }
-  }
-
-  // Non-refreshable providers (GitHub) keep the one-token-per-row
-  // shape — they don't have a refresh ceremony to share across calls.
-  for (const i of nonRefreshable) {
-    try {
-      const token = decrypt(i.encrypted_access_token);
-      switch (i.provider) {
-        case "github":
-          Object.assign(tools, buildGitHubTools(token));
-          connected.push("github");
-          break;
-      }
-    } catch (err) {
-      console.error(
-        `Failed to prepare ${i.provider} tools for user ${userId}:`,
         err,
       );
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   Clock,
   Image as ImageIcon,
@@ -19,24 +20,67 @@ import { PerformanceBlock } from "../blocks/performance";
 import { SourceRefs, ViralityRow } from "../blocks/virality";
 import { KIND_LABELS, PLATFORM_LABELS, PROVIDER_LABELS } from "../constants";
 import { accountTitle, expiresLabel } from "../helpers";
+import { EditableField } from "../editable-field";
 import type { IdeasAccount, VideoIdeaRow } from "../types";
 
 // IdeaDetailModal — opened from the master feed's compact cards.
 //
-// Layout decisions:
-// 1. Top: PerformanceBlock for done ideas (verdict + stats + post-
-//    mortem). Always visible since it's the whole point of reviewing.
-// 2. Rationale line — short, always visible.
-// 3. Script — primary content, expanded by default. Collapsible so
-//    after the user has read it once they can collapse to see the
-//    caption + virality below without scrolling.
-// 4. Caption tabs — primary content, always visible.
-// 5. Secondary content (CTA / Visual notes / Virality plan / Source
-//    evidence) — COLLAPSED by default. The modal was reportedly
-//    overwhelming on open; tucking the less-frequently-used sections
-//    behind disclosures reduces the visual load while keeping them
-//    one click away.
-// 6. Action toolbar — sticky-feeling row at the bottom.
+// Inline editing: every content-shaped Section is wrapped in an
+// EditableField. Click to edit; blur saves via PATCH; ✨ button asks
+// the AI for 3 alternatives via /polish. Agent-controlled fields
+// (kind, format, source_refs, expires_at, video_format) stay read-only
+// because they drive expiry math + agent lookup patterns.
+
+type PolishField =
+  | "title"
+  | "hook"
+  | "script"
+  | "post_title"
+  | "description"
+  | "cta"
+  | "visual_notes"
+  | "thumbnail_concept"
+  | "engagement_hook"
+  | "tiktok_caption"
+  | "youtube_title"
+  | "youtube_description"
+  | "instagram_caption";
+
+async function patchIdea(
+  ideaId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const res = await fetch(`/api/video-ideas/${ideaId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Save failed (${res.status})`);
+  }
+}
+
+async function fetchPolish(
+  ideaId: string,
+  field: PolishField,
+  current: string,
+  style?: "shorter" | "punchier" | "alt_take",
+): Promise<Array<{ label: string; value: string }>> {
+  const res = await fetch(`/api/video-ideas/${ideaId}/polish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ field, style, current }),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(txt || `Polish failed (${res.status})`);
+  }
+  const data = (await res.json()) as {
+    alternatives?: Array<{ label: string; value: string }>;
+  };
+  return data.alternatives ?? [];
+}
 
 export function IdeaDetailModal({
   idea,
@@ -54,8 +98,6 @@ export function IdeaDetailModal({
 }: {
   idea: VideoIdeaRow;
   account: IdeasAccount | null;
-  /** Optional: every account this idea targets. If absent or empty,
-   *  falls back to single-account subtitle using `account`. */
   targets?: IdeasAccount[] | null;
   reviewingId: string | null;
   onClose: () => void;
@@ -67,6 +109,7 @@ export function IdeaDetailModal({
   onDeletePosted?: () => void;
   onReview?: (postId?: string) => void;
 }) {
+  const router = useRouter();
   const captionTabs = useMemo(() => buildCaptionTabs(idea), [idea]);
   const chipTargets: IdeasAccount[] =
     targets && targets.length > 0 ? targets : account ? [account] : [];
@@ -80,6 +123,23 @@ export function IdeaDetailModal({
           })
           .join(" · ")
       : `${(idea.provider ?? "").toLowerCase()} · Unknown account`;
+
+  // Bind a PATCH wrapper per field so EditableField's onSave stays
+  // a () => Promise<void> shape. router.refresh() after each save so
+  // the modal's parent picks up the new value.
+  const editable = (field: PolishField) => {
+    return {
+      onSave: async (next: string) => {
+        await patchIdea(idea.id, { [field]: next });
+        router.refresh();
+      },
+      polish: {
+        label: `Rewrite ${field.replace(/_/g, " ")}`,
+        fetchAlternatives: (current: string) =>
+          fetchPolish(idea.id, field, current),
+      },
+    };
+  };
 
   return (
     <Modal
@@ -97,6 +157,17 @@ export function IdeaDetailModal({
             onReview={(postId) => onReview?.(postId)}
           />
         )}
+
+        <Section title="Title" collapsible defaultOpen={false}>
+          <EditableField
+            value={idea.title}
+            placeholder="Title…"
+            required
+            saveLabel="Save title"
+            {...editable("title")}
+          />
+        </Section>
+
         {idea.rationale && (
           <p className="rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
             <span className="font-medium text-neutral-700 dark:text-neutral-300">
@@ -106,93 +177,86 @@ export function IdeaDetailModal({
           </p>
         )}
 
-        {idea.script ? (
-          <Section
-            title="Script"
-            textToCopy={idea.script}
-            collapsible
-            defaultOpen
-          >
-            <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-neutral-50 px-3 py-3 text-xs text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
-              {idea.script}
-            </pre>
-          </Section>
-        ) : idea.hook ? (
-          <Section title="Hook" textToCopy={idea.hook}>
-            <p className="rounded-md bg-neutral-50 px-3 py-3 text-sm text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
-              {idea.hook}
-            </p>
-          </Section>
-        ) : null}
+        <Section
+          title="Script"
+          textToCopy={idea.script ?? undefined}
+          collapsible
+          defaultOpen
+        >
+          <EditableField
+            value={idea.script}
+            placeholder="Add a beat-by-beat script…"
+            multiline
+            monospace
+            saveLabel="Save script"
+            {...editable("script")}
+          />
+        </Section>
+
+        <Section title="Hook" textToCopy={idea.hook ?? undefined}>
+          <EditableField
+            value={idea.hook}
+            placeholder="First spoken/shown line…"
+            saveLabel="Save hook"
+            {...editable("hook")}
+          />
+        </Section>
 
         {captionTabs.length > 0 && <CaptionTabs tabs={captionTabs} />}
 
-        {idea.cta && (
-          <Section
-            title="Call to action"
-            textToCopy={idea.cta}
-            collapsible
-            defaultOpen={false}
-          >
-            <p className="rounded-md bg-neutral-50 px-3 py-2 text-sm text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
-              {idea.cta}
-            </p>
-          </Section>
-        )}
+        <Section
+          title="Call to action"
+          textToCopy={idea.cta ?? undefined}
+          collapsible
+          defaultOpen={false}
+        >
+          <EditableField
+            value={idea.cta}
+            placeholder="One explicit ask…"
+            saveLabel="Save CTA"
+            {...editable("cta")}
+          />
+        </Section>
 
-        {idea.visual_notes && (
-          <Section title="Visual notes" collapsible defaultOpen={false}>
-            <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-neutral-50 px-3 py-3 text-xs text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-              {idea.visual_notes}
-            </pre>
-          </Section>
-        )}
+        <Section title="Visual notes" collapsible defaultOpen={false}>
+          <EditableField
+            value={idea.visual_notes}
+            placeholder="Lighting, framing, props, B-roll…"
+            multiline
+            saveLabel="Save visual notes"
+            {...editable("visual_notes")}
+          />
+        </Section>
 
-        {(idea.optimal_post_window ||
-          idea.suggested_duration ||
-          idea.thumbnail_concept ||
-          idea.engagement_hook ||
-          idea.trending_sound) && (
-          <Section title="Virality plan" collapsible defaultOpen={false}>
-            <div className="space-y-2 rounded-md bg-neutral-50 px-3 py-3 text-xs dark:bg-neutral-900">
-              {idea.optimal_post_window && (
-                <ViralityRow
-                  Icon={Clock}
-                  label="When to post"
-                  value={idea.optimal_post_window}
-                />
-              )}
-              {idea.suggested_duration && (
-                <ViralityRow
-                  Icon={Timer}
-                  label="Target length"
-                  value={idea.suggested_duration}
-                />
-              )}
-              {idea.thumbnail_concept && (
-                <ViralityRow
-                  Icon={ImageIcon}
-                  label="Cover / first frame"
-                  value={idea.thumbnail_concept}
-                />
-              )}
-              {idea.engagement_hook && (
-                <ViralityRow
-                  Icon={MessageCircle}
-                  label="Comment-driver"
-                  value={idea.engagement_hook}
-                />
-              )}
-              {idea.trending_sound && (
-                <ViralityRow
-                  Icon={Music}
-                  label="Sound"
-                  value={idea.trending_sound}
-                />
-              )}
-            </div>
-          </Section>
-        )}
+        <Section title="Virality plan" collapsible defaultOpen={false}>
+          <div className="space-y-2 rounded-md bg-neutral-50 px-3 py-3 text-xs dark:bg-neutral-900">
+            <ViralityRow
+              Icon={Clock}
+              label="When to post"
+              value={idea.optimal_post_window}
+            />
+            <ViralityRow
+              Icon={Timer}
+              label="Target length"
+              value={idea.suggested_duration}
+            />
+            <ViralityRow
+              Icon={ImageIcon}
+              label="Cover / first frame"
+              value={idea.thumbnail_concept}
+            />
+            <ViralityRow
+              Icon={MessageCircle}
+              label="Comment-driver"
+              value={idea.engagement_hook}
+            />
+            <ViralityRow
+              Icon={Music}
+              label="Sound"
+              value={idea.trending_sound}
+            />
+          </div>
+        </Section>
 
         {idea.source_refs && Object.keys(idea.source_refs).length > 0 && (
           <Section title="Source evidence" collapsible defaultOpen={false}>
