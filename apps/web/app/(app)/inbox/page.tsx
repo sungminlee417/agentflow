@@ -8,7 +8,8 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-const SUPPORTED_PROVIDERS = new Set(["instagram", "youtube"]);
+// TT reads via Apify; sends are manual (clipboard) until app review.
+const SUPPORTED_PROVIDERS = new Set(["instagram", "youtube", "tiktok"]);
 
 export default async function InboxPage() {
   const supabase = await createSupabaseServerClient();
