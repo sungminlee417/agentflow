@@ -1,3 +1,4 @@
+import "@/lib/ai-bootstrap";
 import { NextResponse, type NextRequest } from "next/server";
 import { generateText } from "ai";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -44,6 +45,10 @@ type IncomingComment = {
   source_video_id: string;
   source_video_url: string | null;
   source_video_title: string | null;
+  /** Caption / description from the platform — passed to the AI as
+   *  extra video context. NOT persisted in comment_replies; it's only
+   *  used at draft time. */
+  source_video_description: string | null;
   source_posted_at: string | null;
 };
 
@@ -97,6 +102,11 @@ async function fetchInstagramComments(token: string): Promise<IncomingComment[]>
           timestamp?: string;
         }>;
       };
+      // On IG the "caption" IS the video's description. Keep a short
+      // form for the chip label (title) AND the full text for AI
+      // context.
+      const fullCaption = m.caption ?? null;
+      const shortTitle = fullCaption ? fullCaption.slice(0, 100) : null;
       for (const c of comments.data ?? []) {
         if (!c.text) continue;
         out.push({
@@ -105,7 +115,8 @@ async function fetchInstagramComments(token: string): Promise<IncomingComment[]>
           source_text: c.text,
           source_video_id: m.id,
           source_video_url: m.permalink ?? null,
-          source_video_title: m.caption?.slice(0, 200) ?? null,
+          source_video_title: shortTitle,
+          source_video_description: fullCaption,
           source_posted_at: c.timestamp ?? null,
         });
       }
@@ -150,6 +161,7 @@ async function fetchYouTubeComments(token: string): Promise<IncomingComment[]> {
       snippet?: {
         resourceId?: { videoId?: string };
         title?: string;
+        description?: string;
       };
     }>;
   };
@@ -157,8 +169,12 @@ async function fetchYouTubeComments(token: string): Promise<IncomingComment[]> {
     .map((it) => ({
       id: it.snippet?.resourceId?.videoId ?? null,
       title: it.snippet?.title ?? null,
+      description: it.snippet?.description ?? null,
     }))
-    .filter((v): v is { id: string; title: string | null } => !!v.id);
+    .filter(
+      (v): v is { id: string; title: string | null; description: string | null } =>
+        !!v.id,
+    );
 
   const out: IncomingComment[] = [];
   for (const v of videos) {
@@ -193,6 +209,7 @@ async function fetchYouTubeComments(token: string): Promise<IncomingComment[]> {
           source_video_id: v.id,
           source_video_url: `https://www.youtube.com/watch?v=${v.id}`,
           source_video_title: v.title,
+          source_video_description: v.description,
           source_posted_at: c?.snippet?.publishedAt ?? null,
         });
       }
@@ -257,10 +274,11 @@ async function fetchTikTokCommentsViaApify(
       (row.webVideoUrl as string | undefined) ??
       (row.url as string | undefined) ??
       null;
-    const videoTitle =
-      (row.text as string | undefined)?.slice(0, 200) ??
-      (row.caption as string | undefined)?.slice(0, 200) ??
+    const fullCaption =
+      (row.text as string | undefined) ??
+      (row.caption as string | undefined) ??
       null;
+    const videoTitle = fullCaption ? fullCaption.slice(0, 100) : null;
     const createIso =
       typeof row.createTimeISO === "string" ? row.createTimeISO : null;
 
@@ -293,6 +311,7 @@ async function fetchTikTokCommentsViaApify(
         source_video_id: videoId,
         source_video_url: videoUrl,
         source_video_title: videoTitle,
+        source_video_description: fullCaption,
         source_posted_at: ts ?? createIso,
       });
     }
@@ -397,6 +416,108 @@ async function generateDraftsForComments(
     voiceAnchor,
   });
 
+  // Bulk look up linked video_ideas for every video referenced by
+  // these comments. If we shot this video from a tracked idea, the
+  // idea row has the script + post-title + description + hashtags —
+  // way more context than just the public title.
+  const ideasByVideoId = new Map<
+    string,
+    {
+      title: string | null;
+      post_title: string | null;
+      description: string | null;
+      script: string | null;
+      hashtags: string[] | null;
+    }
+  >();
+  try {
+    const videoIds = Array.from(
+      new Set(comments.map((c) => c.source_video_id).filter(Boolean)),
+    );
+    if (videoIds.length > 0) {
+      const { data: posts } = await supabase
+        .from("video_idea_posts")
+        .select(
+          "posted_video_id, video_ideas!inner(title, post_title, description, script, hashtags)",
+        )
+        .eq("user_id", userId)
+        .eq("integration_id", integration.id)
+        .in("posted_video_id", videoIds);
+      type PostRow = {
+        posted_video_id: string;
+        video_ideas:
+          | {
+              title?: string;
+              post_title?: string | null;
+              description?: string | null;
+              script?: string | null;
+              hashtags?: string[] | null;
+            }
+          | Array<{
+              title?: string;
+              post_title?: string | null;
+              description?: string | null;
+              script?: string | null;
+              hashtags?: string[] | null;
+            }>;
+      };
+      for (const row of (posts ?? []) as unknown as PostRow[]) {
+        const idea = Array.isArray(row.video_ideas)
+          ? row.video_ideas[0]
+          : row.video_ideas;
+        if (!idea) continue;
+        ideasByVideoId.set(row.posted_video_id, {
+          title: idea.title ?? null,
+          post_title: idea.post_title ?? null,
+          description: idea.description ?? null,
+          script: idea.script ?? null,
+          hashtags: idea.hashtags ?? null,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[inbox/pull] linked-idea lookup failed:", err);
+  }
+
+  // Build the per-comment context block. Caps lengths so the draft
+  // call stays cheap.
+  function videoContextFor(c: IncomingComment): string {
+    const lines: string[] = [];
+    if (c.source_video_title) {
+      lines.push(`Video title: "${c.source_video_title}"`);
+    }
+    const desc = c.source_video_description;
+    if (desc && desc.length > 0) {
+      lines.push(
+        `Video caption/description: ${desc.slice(0, 600)}${desc.length > 600 ? "…" : ""}`,
+      );
+    }
+    const linked = ideasByVideoId.get(c.source_video_id);
+    if (linked) {
+      lines.push("");
+      lines.push(
+        "This video was shot from a tracked idea — fuller context follows:",
+      );
+      if (linked.post_title && linked.post_title !== c.source_video_title) {
+        lines.push(`  Post title (draft): ${linked.post_title}`);
+      }
+      if (linked.description) {
+        lines.push(
+          `  Idea description: ${linked.description.slice(0, 400)}${linked.description.length > 400 ? "…" : ""}`,
+        );
+      }
+      if (linked.hashtags && linked.hashtags.length > 0) {
+        lines.push(`  Hashtags: ${linked.hashtags.slice(0, 8).join(", ")}`);
+      }
+      if (linked.script) {
+        lines.push(
+          `  Script (first 800 chars): ${linked.script.slice(0, 800)}${linked.script.length > 800 ? "…" : ""}`,
+        );
+      }
+    }
+    return lines.join("\n");
+  }
+
   // Bounded concurrency: 3 in flight at a time. Keeps us under
   // per-minute token caps without serialising end-to-end.
   const out = new Map<string, string | null>();
@@ -409,13 +530,14 @@ async function generateDraftsForComments(
           const c = queue.shift();
           if (!c) return;
           try {
+            const context = videoContextFor(c);
             const result = await generateText({
               model: getModel(aiProvider, apiKey, userModel),
               system,
               messages: [
                 {
                   role: "user",
-                  content: `Comment to reply to:\n@${c.source_author ?? "viewer"}: ${c.source_text}\n\nVideo: "${c.source_video_title ?? "(untitled)"}"\n\nDraft a reply now.`,
+                  content: `Comment to reply to:\n@${c.source_author ?? "viewer"}: ${c.source_text}\n\n${context || `Video: "${c.source_video_title ?? "(untitled)"}"`}\n\nDraft a reply now.`,
                 },
               ],
             });

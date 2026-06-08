@@ -1,3 +1,4 @@
+import "@/lib/ai-bootstrap";
 import { NextResponse, type NextRequest } from "next/server";
 import { streamText, stepCountIs, type ModelMessage } from "ai";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
